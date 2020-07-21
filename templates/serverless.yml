@@ -1,5 +1,5 @@
 .serverless:deploy:
-  image: gdiener/ci-image-gcp:v1.0.1
+  image: gdiener/ci-image-gcp:v1.3.0
   stage: deploy
   script:
     - &connection |
@@ -109,12 +109,20 @@
         COMMAND_TO_RUN+=( --trigger-http )
       fi
 
+      if [ -n "${EXTRA_FLAGS}" ]; then
+        echo
+        echo "-> Setting additional flags!"
+        echo
+
+        COMMAND_TO_RUN+=( ${EXTRA_FLAGS} )
+      fi
+
       STATUS=0
 
       ${COMMAND_TO_RUN[@]} || STATUS=1
 
       if [ "${STATUS}" = "1" ]; then
-        gcloud functions describe --region=${REGION} ${FUNCTION_NAME}
+        gcloud functions describe --region=${REGION} ${FUNCTION_NAME} | yq - delete 'environmentVariables'
       fi
 
       exit ${STATUS}

@@ -1,0 +1,18 @@
+include:
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/v2.16.2/dataflow-quality.yml'
+
+deploy:production:dataflow:
+  extends: .deploy:dataflow
+  variables:
+    GOOGLE_KEY: ${GOOGLE_KEY_PRODUCTION}
+    TEMPLATE_NAME: ${TEMPLATE_NAME_PRODUCTION}
+    STAGING_LOCATION: ${STAGING_LOCATION_PRODUCTION}
+    TEMPORARY_LOCATION: ${TEMPORARY_LOCATION_PRODUCTION}
+    TEMPLATE_LOCATION: ${TEMPLATE_LOCATION_PRODUCTION}
+    EXTRA_ARGUMENTS: ${EXTRA_ARGUMENTS_PRODUCTION}
+  environment:
+    name: production
+  only:
+    - /^v.+$/i
+  except:
+    - branches

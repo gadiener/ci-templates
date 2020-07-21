@@ -133,7 +133,6 @@ deploy:quality:helm:
 
 .verify:
   extends: .helm
-  stage: verify
   variables:
     GIT_STRATEGY: none
   script:
@@ -151,26 +150,24 @@ deploy:quality:helm:
         TIMEOUT=600s
       fi
 
-      helm test "${APP_NAME}" --logs --timeout "${TIMEOUT}" --namespace "${NAMESPACE}"
+      STATUS=0
+
+      helm test "${APP_NAME}" --logs --timeout "${TIMEOUT}" --namespace "${NAMESPACE}" \
+        || STATUS=1;
 
 
-.rollback:
-  extends: .helm
-  variables:
-    GIT_STRATEGY: none
-  script:
-    - *checkvars
-    - *activate
-    - *connect
-    - |
-      # ROLLBACK PHASE
+      if [ "${STATUS}" = "1" ]; then
+        echo
+        echo "-> Tests have failed on ${ENVIRONMENT} for '${APP_NAME}' !"
+        echo
 
-      echo
-      echo "-> Rolling back ${APP_NAME} !"
-      echo
+        # ROLLBACK PHASE
 
-      if [ -z "${TIMEOUT}" ]; then
-        TIMEOUT=600s
+        echo
+        echo "-> Rolling back ${APP_NAME} !"
+        echo
+
+        helm rollback "${APP_NAME}" --wait --timeout "${TIMEOUT}"
+
+        exit 1
       fi
-
-      helm rollback "${APP_NAME}" --wait --timeout "${TIMEOUT}"

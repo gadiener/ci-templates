@@ -1,5 +1,5 @@
 include:
-  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/v2.13.0/helm-quality.yml'
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/v2.16.2/helm-quality.yml'
 
 deploy:production:helm:
   extends: .deploy:production:helm
@@ -39,29 +39,6 @@ verify:production:
             exit 1
           fi
       done
-  only:
-    - /^v.+$/i
-  except:
-    - branches
-
-rollback:production:
-  extends: .rollback
-  stage: rollback
-  variables:
-    GOOGLE_KEY: ${GOOGLE_KEY_PRODUCTION}
-    CLUSTER_NAME: ${CLUSTER_NAME_PRODUCTION}
-    CLUSTER_ZONE: ${CLUSTER_ZONE_PRODUCTION}
-    NAMESPACE: ${NAMESPACE_PRODUCTION}
-  before_script:
-    - |
-      # CHECK VARIABLES PHASE
-      for var in "GOOGLE_KEY_PRODUCTION" "CLUSTER_NAME_PRODUCTION" "CLUSTER_ZONE_PRODUCTION" "NAMESPACE_PRODUCTION"; do
-          if [ -z "${!var}" ]; then
-            echo "Missing '${var}' variable!"
-            exit 1
-          fi
-      done
-  when: on_failure
   only:
     - /^v.+$/i
   except:

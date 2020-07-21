@@ -1,0 +1,62 @@
+.deploy:dataflow:
+  stage: deploy
+  image: gdiener/sbt-with-gcloud:v1.0.0
+  script:
+    - &connection |
+      # CLUSTER CONNECTION PHASE
+      for var in "GOOGLE_KEY" "GOOGLE_PROJECT" "TEMPLATE_NAME" "STAGING_LOCATION" "TEMPORARY_LOCATION" "TEMPLATE_LOCATION" ; do
+          if [ -z "${!var}" ]; then
+            echo
+            echo "-> [WARNING] Missing '${var}' variable!"
+            echo
+            exit 1
+          fi
+      done
+      echo "${GOOGLE_KEY}" > /tmp/key.json
+
+      gcloud config set project ${GOOGLE_PROJECT}
+
+      echo "Google project '${GOOGLE_PROJECT}' configured"
+      gcloud auth activate-service-account --key-file /tmp/key.json
+    - |
+      # DEPLOY PHASE
+      echo
+      echo "-> Deploying template '${TEMPLATE_NAME}' with tag '${CI_COMMIT_TAG}'"
+      echo
+
+      COMMAND_TO_RUN=( runMain ${TEMPLATE_NAME} --project=${GOOGLE_PROJECT} --runner=DataflowRunner )
+
+      echo
+      echo "-> Setting '${STAGING_LOCATION}' staging location!"
+      echo
+
+      COMMAND_TO_RUN+=( --stagingLocation=${STAGING_LOCATION} )
+
+      echo
+      echo "-> Setting '${TEMPORARY_LOCATION}' temporary location!"
+      echo
+
+      COMMAND_TO_RUN+=( --tempLocation=${TEMPORARY_LOCATION} )
+
+      echo
+      echo "-> Setting '${TEMPLATE_LOCATION}' template location!"
+      echo
+
+      COMMAND_TO_RUN+=( --templateLocation=${TEMPLATE_LOCATION} )
+
+      if [ -n "${EXTRA_ARGUMENTS}" ]; then
+        echo
+        echo "-> Setting '${EXTRA_ARGUMENTS}' extra arguments!"
+        echo
+
+        COMMAND_TO_RUN+=( ${EXTRA_ARGUMENTS} )
+      fi
+
+      sbt "${COMMAND_TO_RUN[*]}"
+
+      echo
+      echo "-> Deploy of '${TEMPLATE_NAME}' completed!"
+      echo
+  variables:
+    GIT_DEPTH: 1
+    GOOGLE_APPLICATION_CREDENTIALS: /tmp/key.json

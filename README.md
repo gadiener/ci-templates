@@ -16,7 +16,7 @@ With Kubernetes:
 
 With Helm:
 
-`lint -> build -> test -> push -> deploy -> verify -> rollback -> notify`
+`lint -> build -> test -> push -> deploy -> verify -> notify`
 
 
 Our workflow:
@@ -98,6 +98,7 @@ According to the operation / the type of pipeline you have to perform, you can p
   - [Multi-regional deployment](#google-function-multiregion-pipeline)
 - [Google endpoint](#google-endpoint)
 - [Google cloud run](#google-cloud-run)
+- [Google dataflow](#dataflow)
 - [Terraform pipeline](#terraform-pipeline)
 - [Terraform security check](#terraform-security-score)
 - [Notify sentry of release](#notify-sentry-of-release)
@@ -478,7 +479,6 @@ stages:
   - push
   - deploy
   - verify
-  - rollback
 
 variables:
   IMAGES: "app nginx"
@@ -618,6 +618,7 @@ variables:
   TRIGGER_HTTP: 1
   TIMEOUT: 30
   ENTRYPOINT: main
+  EXTRA_FLAGS: "--vpc-connector serverless" # In case there are specific flags/features to use
 
   # QUALITY VARIABLES
   SERVICE_ACCOUNT_QUALITY: default
@@ -644,6 +645,7 @@ variables:
   TRIGGER_HTTP: 1
   TIMEOUT: 30
   ENTRYPOINT: main
+  EXTRA_FLAGS: "--vpc-connector serverless" # In case there are specific flags/features to use
 
   # QUALITY VARIABLES
   SERVICE_ACCOUNT_QUALITY: default
@@ -680,6 +682,7 @@ variables:
   TRIGGER_HTTP: 1
   TIMEOUT: 30
   ENTRYPOINT: main
+  EXTRA_FLAGS: "--vpc-connector serverless" # In case there are specific flags/features to use
 
   # QUALITY VARIABLES
   SERVICE_ACCOUNT_QUALITY: default
@@ -761,6 +764,33 @@ variables:
   MEMORY: "128M"
   MAX_INSTANCES: "3"
   ENV: "KEY1=value1,KEY2=value2"
+```
+
+## Google Dataflow
+
+```yaml
+include:
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/dataflow-production.yml'
+
+stages:
+  - deploy
+
+variables:
+  GOOGLE_PROJECT: my-project
+
+  GOOGLE_KEY_QUALITY: <google json key>
+  TEMPLATE_NAME_QUALITY: my-template
+  STAGING_LOCATION_QUALITY: gs://bucket
+  TEMPORARY_LOCATION_QUALITY: gs://bucket
+  TEMPLATE_LOCATION_QUALITY: gs://bucket
+  EXTRA_ARGUMENTS_QUALITY: "--args1=value1 --args2=value2"
+
+  GOOGLE_KEY_PRODUCTION: <google json key>
+  TEMPLATE_NAME_PRODUCTION: my-template
+  STAGING_LOCATION_PRODUCTION: gs://bucket
+  TEMPORARY_LOCATION_PRODUCTION: gs://bucket
+  TEMPLATE_LOCATION_PRODUCTION: gs://bucket
+  EXTRA_ARGUMENTS_PRODUCTION: "--args1=value1 --args2=value2"
 ```
 
 ## Terraform pipeline
