@@ -1,6 +1,6 @@
 .terraform:
   image:
-    name: hashicorp/terraform:0.12.24
+    name: hashicorp/terraform:0.12.29
     entrypoint: [""]
 
 cache:
@@ -33,7 +33,19 @@ plan:
     - *check
     - &init |
       terraform init
-    - terraform plan -out=plan.tfplan
+    - |
+      terraform plan -out=plan.tfplan | tee operation
+      if ( ! $(grep '0 to destroy' operation > /dev/null) ); then
+        echo 
+        echo 
+        echo "****************************************"
+        echo "****************************************"
+        echo "****    !!!!    WARNING     !!!!    ****"
+        echo "****************************************"
+        echo "****************************************"
+        echo
+        echo "Destroy operation detected, be careful!"
+      fi
   artifacts:
     name: plan
     paths:

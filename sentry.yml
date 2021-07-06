@@ -1,8 +1,9 @@
 .sentry:
-  image: getsentry/sentry-cli:1.52.3
+  image: linuxbandit/sentry-cli-bash:v1.1.0
   only:
     - /^v.+$/i
     - master
+    - merge_requests
   allow_failure: true
   when: on_success
   script:
@@ -17,7 +18,7 @@
 
       ENVIRONMENT="production"
       if [ -z "${CI_COMMIT_TAG}" ]; then
-        CI_COMMIT_TAG=${CI_COMMIT_SHA}
+        CI_COMMIT_TAG=$(git describe --tags --always)
         ENVIRONMENT="quality"
       fi
 

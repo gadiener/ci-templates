@@ -77,6 +77,7 @@ According to the operation / the type of pipeline you have to perform, you can p
 - [Linting](#linting)
 - Tests
   - [Docker-compose tests](#unit-test-stage)
+  - [API tests](#api-test-stage)
 - [Docker pipeline](#docker-pipeline)
   - Build
   - Test for image vulnerabilities
@@ -97,7 +98,9 @@ According to the operation / the type of pipeline you have to perform, you can p
   - [Regional deployment](#google-function-regional-pipeline)
   - [Multi-regional deployment](#google-function-multiregion-pipeline)
 - [Google endpoint](#google-endpoint)
-- [Google cloud run](#google-cloud-run)
+- Google cloud run
+  - [Quality pipeline](#google-cloud-run-quality)
+  - [Production pipeline](#google-cloud-run-production)
 - [Google dataflow](#dataflow)
 - [Terraform pipeline](#terraform-pipeline)
 - [Terraform security check](#terraform-security-score)
@@ -197,6 +200,21 @@ variables:
   REVIEWDOG_LEVEL: warning # optional, values: info, warning, error
 ```
 
+### Linting python files
+
+```yaml
+include:
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/lint-python.yml'
+
+stages:
+  - lint
+
+variables:
+  IGNORE_PYTHON_LINT: "E10,D11,I12" #@see https://flake8.pycqa.org/en/latest/user/violations.html
+```
+
+The docker image allows use with reviewdog, like above, but the code has not been added yet. Contributions are welcome
+
 # Unit test stage
 
 ```yaml
@@ -211,7 +229,24 @@ variables:
   COMPOSER_FILE_NAME: "docker-compose.test.yml" #Default value
 ```
 
+This assumes testing to be done on the containerised application.
 This will spin up a `docker-compose.test.yml` and check the exit code of the container `app`. If the file is not named `docker-compose.test.yml`, or the test container is not named `app`, the variables are there to correct the names.
+
+# API test stage
+
+```yaml
+include:
+  remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/test-api.yml'
+
+stages:
+  - test
+
+variables:
+  TEST_FOLDER: "tests" #Default value
+  THREADS: "3" #Default value
+```
+
+This will run all the test definitions defined with BDD-syntax into [karate](https://github.com/intuit/karate)
 
 ## Docker pipeline
 
@@ -229,11 +264,90 @@ variables:
   STAGES: "build assets"
   DOCKERFILES_DIR: "docker"
   SKIP_DOCKER_CACHE: "false"
+  DOCKER_NAME_CONTAINS_BRANCH: "true" #optional
 ```
 
 All stages in Docker file should be named (e.g. `AS buildes`, `AS prod`...). These need to be added to `STAGES` variable. `IMAGES` variable defines the images that will be built, just delete the variable if a single image will be created. In this case the image will be named as `CI_REGISTRY_IMAGE`, othewise `CI_REGISTRY_IMAGE` will be a folder containing `IMAGES`.
 `DOCKERFILES_DIR` is used to specify a different folder containing Dockerfiles instead of the default root directory.
 
+This will spawn a job `build` and a job `build:cache`. NOTE: The cache created at pipeline N is used for the pipeline N+1
+
+By enabling the flag `DOCKER_NAME_CONTAINS_BRANCH`, every branch built (so, by default, a branch which is undergoing MR) will have its own registry image in the following format:
+`registry.example.com/repo-path/repo-name/branch:tag` or `registry.example.com/repo-path/repo-name/branch/image:tag` (master branch is excluded from this).
+This is opposed to the 'usual'
+`registry.example.com/repo-path/repo-name:tag` or
+`registry.example.com/repo-path/repo-name/image:tag` (where classically, image:={app|nginx})
+
+NB: when using this flag, remember that the gitlab's registry cleanup policy happens *per-directory* and not *globally* inside a project's registry.
+
+### Alternative multi-stage build / caching
+
+`.docker:build:multi` template allows building a particular stage of a multi-stage Dockerfile with an optional cache facility. Unlike the other pipeline template, this cache is used within the same pipeline
+
+One can add the following to the .gitlab-ci:
+
+```
+stages:
+  ...
+  - build-cache # new!
+  - build
+  ...
+
+
+# this step should be run before running any other steps so that it results in a cached image that can be re-used in the next build stage
+build-cache:
+  extends: .docker:build:multi
+  stage: build-cache
+  variables:
+    # target stage name
+    BUILD_TARGET: base
+    # tag suffix to produce
+    IMAGE_TAG_SUFFIX: base
+
+build-prod:
+  extends: .docker:build:multi
+  stage: build
+  variables:
+    # defines the suffix of the cache image
+    CACHE_FROM: base
+    BUILD_TARGET: prod
+    # note, no IMAGE_TAG_SUFFIX defined - this will be the main image in the repo
+
+build-debug:
+  extends: .docker:build:multi
+  stage: build
+  variables:
+    CACHE_FROM: base
+    BUILD_TARGET: debug
+    IMAGE_TAG_SUFFIX: debug
+
+build-nginx:
+  extends: .docker:build:multi
+  stage: build
+  variables:
+    # note, no CACHE_FROM defined - this will be built without cache
+    BUILD_TARGET: nginx
+    IMAGE_TAG_SUFFIX: nginx
+```
+
+In natural language: there's a pipeline stage `build-cache` where the docker stage is built, and the following `build` pipeline stage has 3 jobs using the pre-built docker stage.
+
+```
+.docker:build:multi:
+  extends: .docker
+  stage: build
+  #variables:
+    #### Supported vars
+    #CACHE_FROM: base
+    #IMAGE_TAG_SUFFIX: debug
+    #BUILD_TARGET: prod
+```
+
+NOTE: this job assumes that the Dockerfile is ONE, and in the root of the project.
+
+This job does not override the jobs described above: to remove jobs `build` and `build:cache`, add to the .gitlab.ci.yml an override to never run them.
+
+Additionally, this job *by default* creates a docker image for every branch (see end of previous section)
 
 ## Kubernetes quality pipeline
 
@@ -345,7 +459,7 @@ variables:
   DOMAIN_PRODUCTION_ASIA: as.production.example.com
 ```
 
-## Note on configmaps
+### Note on configmaps
 In order to deploy configmaps at every run (not just after the manual stage of "manifest") one can use this code:
 
 1. Remember to add among the `variables:` the `BEFORE_CUSTOM_APPLY_FILE_PATH: "/tmp/before-manifest.yaml"`
@@ -414,6 +528,12 @@ deploy:production:europe:image:
   before_script:
     - *deployconfig
 ```
+
+### Note on secrets
+As of version v2.29.1 of the pipelines, Mozilla SOPS has been introduced to take care of secrets *inside of repositories* (encrypted).
+On the human side, don't forget to put git hooks to avoid commit of plaintext secrets.
+On the tech side, in order to use this new feature (which is optional), one needs to add in the gitlab variables a SOPS_KEY (a json of a service account with `Cloud KMS CryptoKey Decrypter` permission on the key), and a SOPS_CONF (containing the `.sops.yaml` configuration).
+
 
 ## Kubernetes run script quality
 
@@ -503,6 +623,20 @@ variables:
   # PRODUCTION ASIA VARIABLES
   ...
 ```
+
+In addition to these features, starting from `v2.29.3` you can enable review app on merge requests by including in the remotes:
+```
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/helm-branches.yaml'
+```
+and adding as the *last* stage `- stop`.
+
+Doing so will create a new helm deployment in QA based on the commit slug when the branch name starts with "feat". Once you're done, the branch deployment will be automatically deleted. This requires also to set up a values.yaml in the helm/feature/ folder (you may juspy quality one as a starting point).
+
+Branch domain and app name can be overriden in gitlab-ci.yml using these variables:
+
+DOMAIN_BRANCH: "mydomain.tld"
+APP_NAME_BRANCH: "myapp"
+
 
 ### Helm chart publishing
 
@@ -739,8 +873,38 @@ variables:
   ENDPOINT_FILE: endpoint.yaml
   GOOGLE_KEY: <google json key>
 ```
+## Google Cloud Run Quality
 
-## Google Cloud Run
+```yaml
+include:
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/cloudrun-quality.yml'
+
+stages:
+  - deploy
+
+variables:
+  GOOGLE_KEY_QUALITY: <google json key>
+  GOOGLE_PROJECT: my-project
+  CLUSTER_NAME_QUALITY: "quality"
+  CLUSTER_ZONE_QUALITY: "europe-west1-b"
+  NAMESPACE: my-k8s-namespace-where-cloudrun-is
+  SERVICE_NAME: awesome-service
+  CONNECTIVITY: "external"
+  TIMEOUT: "60s"
+  CONCURRENCY: "80"
+  CPU: "1000m"
+  MEMORY: "128M"
+  MAX_INSTANCES: "3"
+  ENV_QUALITY: "KEY1=value1,KEY2=value2"
+  SECRET_YAML_QUALITY: <some b64 of a secret called myapp-serviceaccounts>
+  SECRET_MOUNTS: "/secrets=myapp-serviceaccounts"
+  CONFIGMAP_PATH_QUALITY: <a path in this repo containing the definition of a configmap called myapp-configmap>
+  CONFIGMAP_MOUNTS: "/configs=myapp-configmap"
+```
+
+Read more detail about how to mount secrets/configmaps [here](https://github.com/jobtome-labs/ci-templates/pull/47)
+
+## Google Cloud Run Production
 
 ```yaml
 include:
@@ -753,18 +917,29 @@ variables:
   GOOGLE_KEY_QUALITY: <google json key>
   GOOGLE_KEY_PRODUCTION: <google json key>
   GOOGLE_PROJECT: my-project
+  CLUSTER_NAME_QUALITY: "quality"
+  CLUSTER_ZONE_QUALITY: "europe-west1-b"
+  CLUSTER_NAME_PRODUCTION: "production"
+  CLUSTER_ZONE_PRODUCTION: "europe-west1-b"
+  NAMESPACE: my-k8s-namespace-where-cloudrun-is
   SERVICE_NAME: awesome-service
-  NAMESPACE: awesome-service
-  CLUSTER_NAME: quality
-  CLUSTER_ZONE: europe-west1b
   CONNECTIVITY: "external"
   TIMEOUT: "60s"
   CONCURRENCY: "80"
   CPU: "1000m"
   MEMORY: "128M"
   MAX_INSTANCES: "3"
-  ENV: "KEY1=value1,KEY2=value2"
+  ENV_QUALITY: "KEY1=value1,KEY2=value2"
+  ENV_PRODUCTION: "KEY1=valueProd1,KEY2=valueProd2"
+  SECRET_YAML_QUALITY: <some b64 of a secret called myapp-serviceaccounts>
+  SECRET_YAML_PRODUCTION: <some b64 of a secret called myapp-serviceaccounts>
+  SECRET_MOUNTS: "/secrets=myapp-serviceaccounts"
+  CONFIGMAP_PATH_QUALITY: <a path in this repo containing the definition of a configmap called myapp-configmap>
+  CONFIGMAP_PATH_PRODUCTION: <a path in this repo containing the definition of a configmap called myapp-configmap>
+  CONFIGMAP_MOUNTS: "/configs=myapp-configmap"
 ```
+
+Read more detail about how to mount secrets/configmaps [here](https://github.com/jobtome-labs/ci-templates/pull/47)
 
 ## Google Dataflow
 
@@ -822,6 +997,24 @@ include:
 stages:
   - test
 ```
+
+## Bash script execution
+
+It could be useful to have a script executed through a pipeline. This enables code reviews, programmatic execution (of the script, and of checks beforehands), and avoids 'works on my machine' cases. Our most prominent use-case is when we have to work on the terraform state.
+```yaml
+include:
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/shell-job.yml'
+
+stages:
+  - lint
+  - deploy
+```
+
+NOTE:
+- the file does not need to be executable, the pipeline will do `chmod +x`
+- the script name to be launched (e.g. `test-script.sh`) MUST be passed as variable with name `SCRIPT_NAME` in the 'manual' deploy phase (see picture). If the script needs it, a variable `ARGUMENTS` can also be passed. The receiving script must know how to use them!
+
+![Example of gitlab](gitlab-manual.jpg)
 
 ## Notify sentry of release
 

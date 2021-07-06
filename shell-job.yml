@@ -1,0 +1,36 @@
+include:
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/v2.29.3/lint-shell.yml'
+
+job:shell:
+  stage: deploy
+  image: linuxbandit/terraform-with-tfsec:v0.12.24-bash
+  script:
+    - |
+
+      if [ -n "${SCRIPT_NAME}" ]; then
+
+        chmod +x ./${SCRIPT_NAME}
+
+        echo
+        echo "-> Shell file ${SCRIPT_NAME} to be executed!"
+        echo
+
+        COMMAND_TO_RUN=( ./${SCRIPT_NAME} ${ARGUMENTS[@]} )
+
+        "${COMMAND_TO_RUN[@]}"
+
+        echo
+        echo "-> Shell file run!"
+        echo
+
+      else
+
+        echo
+        echo "-> Variable SCRIPT_NAME is empty!"
+        echo
+
+      fi
+
+  when: manual
+  only:
+    - master

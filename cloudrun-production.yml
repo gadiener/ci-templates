@@ -1,13 +1,17 @@
 include:
-  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/v2.16.2/cloudrun-quality.yml'
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/v2.29.3/cloudrun-quality.yml'
 
 deploy:production:
   extends: deploy:quality
   variables:
     GOOGLE_KEY: ${GOOGLE_KEY_PRODUCTION}
     ENVIRONMENT: production
+    CLUSTER_NAME: ${CLUSTER_NAME_PRODUCTION}
+    CLUSTER_ZONE: ${CLUSTER_ZONE_PRODUCTION}
+    ENV: ${ENV_PRODUCTION}
     DOMAIN: "${SERVICE_NAME}.${NAMESPACE}.example.com"
     SECRET_YAML: "${SECRET_YAML_PRODUCTION}"
+    CONFIGMAP_PATH: "${CONFIGMAP_PATH_PRODUCTION}"
   only:
     - /^v.+$/i
   except:

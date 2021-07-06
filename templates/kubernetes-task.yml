@@ -49,6 +49,11 @@
               "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"kupdate/date\":\"`date +'%s'`\"}}}}}"
       }
 
+      export -f kupdate
+
       # EXEC THE SCRIPT TO KUBERNETES
 
-      "${KUBERNETES_SCRIPT}"
+      FINAL_SCRIPT=( bash -c )
+      FINAL_SCRIPT+=( "${KUBERNETES_SCRIPT}" )
+
+      "${FINAL_SCRIPT[@]}"

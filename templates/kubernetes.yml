@@ -1,5 +1,8 @@
+.gcloud-image:
+  image: jobtomelabs/ci-image-gcp:v1.4.0
+
 .deploy:image:
-  image: gdiener/ci-image-gcp:v1.0.1
+  extends: .gcloud-image
   stage: deploy
   script:
     - &connection |
@@ -65,20 +68,44 @@
         exit 1
       fi
 
-      if [ -n "${SECRET_YAML}" ]; then
+      # SECRETS APPLICATION
+      # Priority: file in repo, then SECRET_YAML
+
+      if [ -z "${ENVIRONMENT}" ]; then
+        ENVIRONMENT=production
+      fi
+
+      if [ -z "${KUBERNETES_DIR}" ]; then
+        KUBERNETES_DIR=kube
+      fi
+
+      if [ ! -f "${KUBERNETES_DIR}/${ENVIRONMENT}/secrets.yaml" ] && [ -z "${SECRET_YAML}" ]; then
+        echo
+        echo "-> [WARN] No secret to apply!"
+        echo
+      else
         touch /tmp/secrets.yaml
 
-        echo "${SECRET_YAML}" | base64 -d > /tmp/secrets.yaml
+        if [ -f "${KUBERNETES_DIR}/${ENVIRONMENT}/secrets.yaml" ]; then
+          if [ -z "${SOPS_KEY}" ] || [ -z "${SOPS_CONF}" ]; then
+            echo "[WARN] Cannot apply secrets: missing sops key or conf"
+          else
+            echo "${SOPS_CONF}" > /tmp/.sops.yaml
+            echo "${SOPS_KEY}" > /tmp/sops.json
+            GOOGLE_APPLICATION_CREDENTIALS=/tmp/sops.json sops --config /tmp/.sops.yaml -d "${KUBERNETES_DIR}/${ENVIRONMENT}/secrets.yaml" > /tmp/secrets.yaml
+          fi
+        fi
+
+        if [ -n "${SECRET_YAML}" ]; then
+          echo "${SECRET_YAML}" | base64 -d >> /tmp/secrets.yaml
+        fi
+
         envsubst < /tmp/secrets.yaml > /tmp/secrets.yaml.tmp && mv /tmp/secrets.yaml.tmp /tmp/secrets.yaml
 
         kubectl apply -f /tmp/secrets.yaml
 
         echo
         echo "-> Secrets deployed!"
-        echo
-      else
-        echo
-        echo "-> Missing 'SECRET_YAML' variable!"
         echo
       fi
 
@@ -200,7 +227,7 @@
     GIT_STRATEGY: none
 
 .deploy:manifest:
-  image: gdiener/ci-image-gcp:v1.0.1
+  extends: .gcloud-image
   stage: manifest
   script:
     - *connection
@@ -208,22 +235,8 @@
     - |
       # DEPLOY MANIFESTS PHASE
 
-      if [ -n "${SECRET_YAML}" ]; then
-        touch /tmp/secrets.yaml
-
-        echo "${SECRET_YAML}" | base64 -d > /tmp/secrets.yaml
-        envsubst < /tmp/secrets.yaml > /tmp/secrets.yaml.tmp && mv /tmp/secrets.yaml.tmp /tmp/secrets.yaml
-
-        kubectl apply -f /tmp/secrets.yaml
-
-        echo
-        echo "-> Secrets deployed!"
-        echo
-      else
-        echo
-        echo "-> Missing 'SECRET_YAML' variable!"
-        echo
-      fi
+      # SECRETS APPLICATION
+      # Priority: file in repo, then SECRET_YAML
 
       if [ -z "${ENVIRONMENT}" ]; then
         ENVIRONMENT=production
@@ -231,6 +244,36 @@
 
       if [ -z "${KUBERNETES_DIR}" ]; then
         KUBERNETES_DIR=kube
+      fi
+
+      if [ ! -f "${KUBERNETES_DIR}/${ENVIRONMENT}/secrets.yaml" && -z "${SECRET_YAML}" ]; then
+        echo
+        echo "-> [WARN] No secret to apply!"
+        echo
+      else
+        touch /tmp/secrets.yaml
+
+        if [ -f "${KUBERNETES_DIR}/${ENVIRONMENT}/secrets.yaml" ]; then
+          if [ -z "${SOPS_KEY}" ] || [ -z "${SOPS_CONF}" ]; then
+            echo "[WARN] Cannot apply secrets: missing sops key or conf"
+          else
+            echo "${SOPS_CONF}" > /tmp/.sops.yaml
+            echo "${SOPS_KEY}" > /tmp/sops.json
+            GOOGLE_APPLICATION_CREDENTIALS=/tmp/sops.json sops --config /tmp/.sops.yaml -d "${KUBERNETES_DIR}/${ENVIRONMENT}/secrets.yaml" > /tmp/secrets.yaml
+          fi
+        fi
+
+        if [ -n "${SECRET_YAML}" ]; then
+          echo "${SECRET_YAML}" | base64 -d >> /tmp/secrets.yaml
+        fi
+
+        envsubst < /tmp/secrets.yaml > /tmp/secrets.yaml.tmp && mv /tmp/secrets.yaml.tmp /tmp/secrets.yaml
+
+        kubectl apply -f /tmp/secrets.yaml
+
+        echo
+        echo "-> Secrets deployed!"
+        echo
       fi
 
       touch /tmp/manifests.yaml
@@ -286,8 +329,8 @@
   variables:
     GIT_DEPTH: 1
 
-.rollback:
-  image: gdiener/ci-image-gcp:v1.0.1
+.rollback: #FIXME does not roll back the secrets
+  extends: .gcloud-image
   stage: rollback
   script:
     - *connection

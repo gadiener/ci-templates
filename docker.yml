@@ -1,5 +1,5 @@
 include:
-  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/v2.16.2/templates/docker.yml'
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/v2.29.3/templates/docker.yml'
 
 build:
   stage: build
@@ -31,11 +31,18 @@ build:
           done
         fi
 
-        COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}":"${CI_COMMIT_SHORT_SHA}" . )
+        IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}";
+        if [[ "${CI_COMMIT_REF_SLUG}" != "master" ]]; then
+          if [[ "${DOCKER_NAME_CONTAINS_BRANCH}" == "true" ]]; then
+            IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}/${CI_COMMIT_REF_SLUG}:${CI_COMMIT_SHORT_SHA}";
+          fi
+        fi
+
+        COMMAND_TO_RUN+=( -t "${IMAGE_FULL_NAME}" . )
 
         "${COMMAND_TO_RUN[@]}"
 
-        docker push "${CI_REGISTRY_IMAGE}":"${CI_COMMIT_SHORT_SHA}"
+        docker push "${IMAGE_FULL_NAME}"
       else
         if [ -z "${DOCKERFILES_DIR}" ]; then
           DOCKERFILES_DIR=docker
@@ -61,11 +68,18 @@ build:
             done
           fi
 
-          COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}/${image}:${CI_COMMIT_SHORT_SHA}" -f ./"${DOCKERFILES_DIR}/${image}"/Dockerfile . )
+          IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}/${image}:${CI_COMMIT_SHORT_SHA}";
+          if [[ "${CI_COMMIT_REF_SLUG}" != "master" ]]; then
+            if [[ "${DOCKER_NAME_CONTAINS_BRANCH}" == "true" ]]; then
+              IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}/${CI_COMMIT_REF_SLUG}/${image}:${CI_COMMIT_SHORT_SHA}";
+            fi
+          fi
+
+          COMMAND_TO_RUN+=( -t "${IMAGE_FULL_NAME}" -f ./"${DOCKERFILES_DIR}/${image}"/Dockerfile . )
 
           "${COMMAND_TO_RUN[@]}"
 
-          docker push "${CI_REGISTRY_IMAGE}/${image}:${CI_COMMIT_SHORT_SHA}"
+          docker push "${IMAGE_FULL_NAME}"
         done
       fi
   only:
@@ -103,6 +117,8 @@ build:cache:
             echo "Missing build target stage '${stage}' in Dockerfile!"
           else
             docker push "${CI_REGISTRY_IMAGE}:latest-${stage}"
+            docker tag "${CI_REGISTRY_IMAGE}:latest-${stage}" "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}-${stage}"
+            docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}-${stage}"
             COMMAND_CACHE_FROM+=( --cache-from "${CI_REGISTRY_IMAGE}:latest-${stage}" )
           fi
         done
@@ -134,6 +150,8 @@ build:cache:
               echo "Missing build target stage '${stage}' in Dockerfile for ${image}!"
             else
               docker push "${CI_REGISTRY_IMAGE}/${image}:latest-${stage}"
+              docker tag "${CI_REGISTRY_IMAGE}/${image}:latest-${stage}" "${CI_REGISTRY_IMAGE}/${image}:${CI_COMMIT_SHORT_SHA}-${stage}"
+              docker push "${CI_REGISTRY_IMAGE}/${image}:${CI_COMMIT_SHORT_SHA}-${stage}"
               COMMAND_CACHE_FROM+=( --cache-from "${CI_REGISTRY_IMAGE}/${image}:latest-${stage}" )
             fi
           done

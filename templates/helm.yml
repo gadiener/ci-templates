@@ -1,6 +1,5 @@
-
 .helm:
-  image: devth/helm:v3.1.1
+  image: jobtomelabs/helm-sops:v3.1.1
 
 .helm:deploy:
   extends: .helm
@@ -43,11 +42,19 @@
       kubectl cluster-info
       echo
 
-    - |
+    - &environment |
       # CHECK PATHS
 
       if [ -z "${HELM_DIR}" ]; then
         HELM_DIR=helm
+      fi
+
+      if [ -z "${ENVIRONMENT}" ]; then
+        ENVIRONMENT=production
+      fi
+
+      if [ -n "${APP_NAME_BRANCH}" ]; then
+        ENVIRONMENT=quality
       fi
 
       if [ -d "${HELM_DIR}/${ENVIRONMENT}" ]; then
@@ -55,6 +62,7 @@
         echo "-> Getting manifests from directory '${ENVIRONMENT}'"
         echo
         envsubst < "${HELM_DIR}"/"${ENVIRONMENT}"/values.yaml > /tmp/values.yaml
+        HELM_FILES_PATH="${HELM_DIR}/${ENVIRONMENT}"
       fi
 
       if [ -n "${ENVIRONMENT_PATH}" ] && [ "${ENVIRONMENT_PATH}" != "${ENVIRONMENT}" ]; then
@@ -63,19 +71,39 @@
             echo "-> Getting manifests from directory '${ENVIRONMENT_PATH}'"
             echo
             envsubst < "${HELM_DIR}"/"${ENVIRONMENT_PATH}"/values.yaml > /tmp/values.yaml
+            HELM_FILES_PATH="${HELM_DIR}/${ENVIRONMENT_PATH}"
           else
             echo
             echo "-> [WARNING] Enviroment directory in '${ENVIRONMENT_PATH}' doesn't exist!"
             echo
           fi
       fi
-
+    
+    - |
       # SECRETS APPLICATION
+      # Priority: file in repo, then SECRET_YAML
 
-      if [ -n "${SECRET_YAML}" ]; then
+      if [ ! -f "${HELM_FILES_PATH}/secrets.yaml" ] && [ -z "${SECRET_YAML}" ]; then
+        echo
+        echo "-> [WARN] No secret to apply!"
+        echo
+      else
         touch /tmp/secrets.yaml
 
-        echo "${SECRET_YAML}" | base64 -d > /tmp/secrets.yaml
+        if [ -f "${HELM_FILES_PATH}/secrets.yaml" ]; then
+          if [ -z "${SOPS_KEY}" ] || [ -z "${SOPS_CONF}" ]; then
+            echo "[WARN] Cannot apply secrets: missing sops key or conf"
+          else
+            echo "${SOPS_CONF}" > /tmp/.sops.yaml
+            echo "${SOPS_KEY}" > /tmp/sops.json
+            GOOGLE_APPLICATION_CREDENTIALS=/tmp/sops.json sops --config /tmp/.sops.yaml -d "${HELM_FILES_PATH}/secrets.yaml" > /tmp/secrets.yaml
+          fi
+        fi
+
+        if [ -n "${SECRET_YAML}" ]; then
+          echo "${SECRET_YAML}" | base64 -d >> /tmp/secrets.yaml
+        fi
+
         envsubst < /tmp/secrets.yaml > /tmp/secrets.yaml.tmp && mv /tmp/secrets.yaml.tmp /tmp/secrets.yaml
 
         kubectl apply -f /tmp/secrets.yaml
@@ -83,12 +111,9 @@
         echo
         echo "-> Secrets deployed!"
         echo
-      else
-        echo
-        echo "-> Missing 'SECRET_YAML' variable!"
-        echo
       fi
 
+    - &helmsetup |
       # HELM APPLICATION
       helm repo add current-repo "${CHARTS_URL}"
       helm repo update
@@ -96,6 +121,8 @@
       echo
       helm search repo current-repo/"${CHART_NAME}"
       echo
+
+      echo "Chart version - ${CHART_VERSION}"
 
       if [ -z "${CHART_VERSION}" ]; then
         CHART_VERSION=$(helm search repo current-repo/"${CHART_NAME}" | tail -n 1 | awk '{print $2}')
@@ -105,7 +132,24 @@
         TIMEOUT=600s
       fi
 
-      helm upgrade --install --atomic "${APP_NAME}" "current-repo/${CHART_NAME}" --wait --timeout "${TIMEOUT}" -f /tmp/values.yaml --namespace "${NAMESPACE}" --version ${CHART_VERSION}
+    - &helmapply |
+      cat << EOF > /tmp/replacer.sh
+      #!/bin/bash
+      sed 's/name: "${NAMESPACE}"/name: "${APP_NAME}"/g' | sed 's/-tls/-tls-${APP_NAME}/g' | awk '/deployment.yaml|service.yaml|ingress.yaml/,/---/'
+      EOF
+
+      chmod 755 /tmp/replacer.sh
+
+      cat /tmp/replacer.sh
+      
+      if [ -n "${APP_NAME_BRANCH}" ]; then
+        echo ${APP_NAME}
+        echo ${DOMAIN}
+        helm upgrade --install --atomic "${APP_NAME_BRANCH}" "current-repo/${CHART_NAME}" --wait --timeout "${TIMEOUT}" -f /tmp/values.yaml --namespace "${NAMESPACE}" --version ${CHART_VERSION} --post-renderer /tmp/replacer.sh --set ingress.ignoreTest=true --set service.ignoreTest=true
+      else
+        helm upgrade --install --atomic "${APP_NAME}" "current-repo/${CHART_NAME}" --wait --timeout "${TIMEOUT}" -f /tmp/values.yaml --namespace "${NAMESPACE}" --version ${CHART_VERSION} --post-renderer /tmp/replacer.sh --set ingress.ignoreTest=true --set service.ignoreTest=true
+      fi
+      
       sleep 5
 
       echo
@@ -119,7 +163,6 @@ deploy:quality:helm:
   environment:
     name: ${ENVIRONMENT_NAME}
     url: https://${DOMAIN}
-
 
 .deploy:production:helm:
   extends: .helm:deploy
@@ -169,5 +212,41 @@ deploy:quality:helm:
 
         helm rollback "${APP_NAME}" --wait --timeout "${TIMEOUT}"
 
+        exit 1
+      fi
+ 
+.stop:
+  extends: .helm
+  variables:
+    GIT_STRATEGY: none
+  rules:
+    - if: $CI_MERGE_REQUEST_ID && $CI_COMMIT_REF_NAME =~ /^feat/
+      when: manual
+  script:
+    - echo "Remove feature branch app"
+    - *checkvars
+    - *activate
+    - *connect
+    - *environment
+    - *helmsetup
+    - |
+      # HELM TEST
+      
+      echo
+      echo "-> Removing ${APP_NAME} ! Version of the tests: ${CHART_VERSION}"
+      echo
+      
+      if [ -z "${TIMEOUT}" ]; then
+        TIMEOUT=600s
+      fi
+      
+      STATUS=0
+      
+      helm delete "${APP_NAME}" --namespace "${NAMESPACE}" || STATUS=1;
+      
+      if [ "${STATUS}" = "1" ]; then
+        echo
+        echo "-> Removal has failed on ${ENVIRONMENT} for '${APP_NAME}' !"
+        echo
         exit 1
       fi
