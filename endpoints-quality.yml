@@ -1,0 +1,40 @@
+---
+include:
+  - remote: "https://raw.githubusercontent.com/jobtome-labs/ci-templates/v3.32.1/templates/endpoints.yml"
+
+endpoints:validate:quality:
+  extends: .endpoints:validate
+
+  stage: test
+
+  variables:
+    ENDPOINTS_HOST: ${QUALITY_ENDPOINTS_HOST}
+    ENDPOINTS_TITLE: ${QUALITY_ENDPOINTS_TITLE}
+
+  only:
+    - merge_requests
+    - master
+    - main
+    - /^qa.+$/i
+
+  except:
+    variables:
+      - $CI_FAST_TRACK == "true"
+
+endpoints:deploy:quality:
+  extends: .endpoints:deploy
+
+  stage: deploy
+
+  variables:
+    ENDPOINTS_HOST: ${QUALITY_ENDPOINTS_HOST}
+    ENDPOINTS_TITLE: ${QUALITY_ENDPOINTS_TITLE}
+
+  only:
+    - master
+    - main
+    - /^qa.+$/i
+
+  environment:
+    name: quality
+    url: ${QUALITY_ENDPOINTS_HOST}

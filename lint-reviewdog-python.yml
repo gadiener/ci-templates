@@ -1,0 +1,27 @@
+lint:python:
+  stage: lint
+  image: europe-west1-docker.pkg.dev/jobtome-platform/public/pythonlinter-reviewdog:v1.0.0
+  script:
+    - |
+
+      COMMAND_TO_RUN="flake8"
+
+      if [[ -n "${IGNORE_PYTHON_LINT}" ]]; then
+        COMMAND_TO_RUN+=( --ignore=${IGNORE_PYTHON_LINT} )
+      fi
+
+      echo
+      echo "-> Linting code:"
+      echo
+
+      COMMAND_TO_RUN+=( . )
+
+      ${COMMAND_TO_RUN[@]}
+
+      echo
+      echo "-> Code checked!"
+      echo
+  except:
+    variables:
+      - $SKIP_CI_LINT == "true"
+      - $CI_FAST_TRACK == "true"

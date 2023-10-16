@@ -1,5 +1,5 @@
 include:
-  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/v2.16.2/templates/docker.yml'
+  - remote: "https://raw.githubusercontent.com/jobtome-labs/ci-templates/v3.32.1/templates/docker.yml"
 
 build:
   stage: build
@@ -8,8 +8,15 @@ build:
     - &connection |
       # DOCKER LOGIN PHASE
       echo -n "${CI_REGISTRY_PASSWORD}" | docker login -u "${CI_REGISTRY_USER}" --password-stdin "${CI_REGISTRY}"
+
     - |
       # DOCKER BUILD PHASE
+
+      DOCKER_CONTEXT_PATH="."
+
+      if [ -n "${DOCKER_CONTEXT}" ]; then
+        DOCKER_CONTEXT_PATH="$DOCKER_CONTEXT"
+      fi
 
       if [ -z "${IMAGES}" ]; then
 
@@ -25,18 +32,42 @@ build:
           COMMAND_TO_RUN+=( --no-cache )
         fi
 
+        if [ -n "${GO_PROXY_URL}" ]; then
+          COMMAND_TO_RUN+=( --build-arg "GOPROXY=${GO_PROXY_URL}" )
+        fi
+
         if [ -n "${BUILD_ARGS}" ]; then
           for build_arg in ${BUILD_ARGS}; do
             COMMAND_TO_RUN+=( --build-arg "${build_arg}" )
           done
         fi
 
-        COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}":"${CI_COMMIT_SHORT_SHA}" . )
+        IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}";
+        if [[ "${CI_COMMIT_REF_SLUG}" != "master" ]]; then
+          if [[ "${DOCKER_NAME_CONTAINS_BRANCH}" == "true" ]]; then
+            IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}/${CI_COMMIT_REF_SLUG}:${CI_COMMIT_SHORT_SHA}";
+          fi
+        fi
+
+        PUBLISH_TARGET_BASE_COMMAND_TO_RUN=${COMMAND_TO_RUN[@]}
+
+        COMMAND_TO_RUN+=( -t "${IMAGE_FULL_NAME}" "${DOCKER_CONTEXT_PATH}" )
 
         "${COMMAND_TO_RUN[@]}"
 
-        docker push "${CI_REGISTRY_IMAGE}":"${CI_COMMIT_SHORT_SHA}"
+        docker push "${IMAGE_FULL_NAME}"
+
+        if [ -n "${PUBLISH_TARGETS}" ]; then
+          for target in ${PUBLISH_TARGETS}; do
+            TARGET_IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}/${target}:${CI_COMMIT_SHORT_SHA}"
+            PUBLISH_TARGET_COMMAND_TO_RUN=( ${PUBLISH_TARGET_BASE_COMMAND_TO_RUN[@]} -t "${TARGET_IMAGE_FULL_NAME}" --target "${target}" "${DOCKER_CONTEXT_PATH}" )
+            "${PUBLISH_TARGET_COMMAND_TO_RUN[@]}"
+            docker push "${TARGET_IMAGE_FULL_NAME}"
+          done
+        fi
+
       else
+
         if [ -z "${DOCKERFILES_DIR}" ]; then
           DOCKERFILES_DIR=docker
         fi
@@ -55,23 +86,52 @@ build:
             COMMAND_TO_RUN+=( --no-cache )
           fi
 
+          if [ -n "${GO_PROXY_URL}" ]; then
+            COMMAND_TO_RUN+=( --build-arg "GOPROXY=${GO_PROXY_URL}" )
+          fi
+
           if [ -n "${BUILD_ARGS}" ]; then
             for build_arg in ${BUILD_ARGS}; do
               COMMAND_TO_RUN+=( --build-arg "${build_arg}" )
             done
           fi
 
-          COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}/${image}:${CI_COMMIT_SHORT_SHA}" -f ./"${DOCKERFILES_DIR}/${image}"/Dockerfile . )
+          IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}/${image}:${CI_COMMIT_SHORT_SHA}";
+          if [[ "${CI_COMMIT_REF_SLUG}" != "master" ]]; then
+            if [[ "${DOCKER_NAME_CONTAINS_BRANCH}" == "true" ]]; then
+              IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}/${CI_COMMIT_REF_SLUG}/${image}:${CI_COMMIT_SHORT_SHA}";
+            fi
+          fi
+
+          PUBLISH_TARGET_BASE_COMMAND_TO_RUN=${COMMAND_TO_RUN[@]}
+
+          COMMAND_TO_RUN+=( -t "${IMAGE_FULL_NAME}" -f ./"${DOCKERFILES_DIR}/${image}"/Dockerfile "${DOCKER_CONTEXT_PATH}" )
 
           "${COMMAND_TO_RUN[@]}"
 
-          docker push "${CI_REGISTRY_IMAGE}/${image}:${CI_COMMIT_SHORT_SHA}"
+          docker push "${IMAGE_FULL_NAME}"
+
+          if [ -n "${PUBLISH_TARGETS}" ]; then
+            for target in ${PUBLISH_TARGETS}; do
+              TARGET_IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}/${image}/${target}:${CI_COMMIT_SHORT_SHA}"
+              PUBLISH_TARGET_COMMAND_TO_RUN=( ${PUBLISH_TARGET_BASE_COMMAND_TO_RUN[@]} -t "${TARGET_IMAGE_FULL_NAME}" --target "${target}" -f "./${DOCKERFILES_DIR}/${image}/Dockerfile" "${DOCKER_CONTEXT_PATH}" )
+              "${PUBLISH_TARGET_COMMAND_TO_RUN[@]}"
+              docker push "${TARGET_IMAGE_FULL_NAME}"
+            done
+          fi
+
         done
       fi
   only:
     - /^v.+$/i
+    - /^qa.+$/i
     - master
     - merge_requests
+  except:
+    variables:
+      - $SKIP_CI_BUILD == "true"
+
+  retry: 1
 
 build:cache:
   stage: build
@@ -81,6 +141,12 @@ build:cache:
     - |
       # DOCKER BUILD PHASE
 
+      DOCKER_CONTEXT_PATH="."
+
+      if [ -n "${DOCKER_CONTEXT}" ]; then
+        DOCKER_CONTEXT_PATH="$DOCKER_CONTEXT"
+      fi
+
       if [ -z "${IMAGES}" ]; then
 
         COMMAND_CACHE_FROM=()
@@ -89,13 +155,17 @@ build:cache:
           COMMAND_TO_RUN=( docker build --target "${stage}" --cache-from "${CI_REGISTRY_IMAGE}":latest-"${stage}" )
           COMMAND_TO_RUN+=( "${COMMAND_CACHE_FROM[@]}" )
 
+          if [ -n "${GO_PROXY_URL}" ]; then
+            COMMAND_TO_RUN+=( --build-arg "GOPROXY=${GO_PROXY_URL}" )
+          fi
+
           if [ -n "${BUILD_ARGS}" ]; then
             for build_arg in ${BUILD_ARGS}; do
               COMMAND_TO_RUN+=( --build-arg "${build_arg}" )
             done
           fi
 
-          COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}":latest-"${stage}" --build-arg BUILDKIT_INLINE_CACHE=1 . )
+          COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}":latest-"${stage}" --build-arg BUILDKIT_INLINE_CACHE=1 "${DOCKER_CONTEXT_PATH}" )
 
           "${COMMAND_TO_RUN[@]}" || STATUS=1
 
@@ -103,6 +173,8 @@ build:cache:
             echo "Missing build target stage '${stage}' in Dockerfile!"
           else
             docker push "${CI_REGISTRY_IMAGE}:latest-${stage}"
+            docker tag "${CI_REGISTRY_IMAGE}:latest-${stage}" "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}-${stage}"
+            docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}-${stage}"
             COMMAND_CACHE_FROM+=( --cache-from "${CI_REGISTRY_IMAGE}:latest-${stage}" )
           fi
         done
@@ -120,13 +192,17 @@ build:cache:
 
             COMMAND_TO_RUN+=( "${COMMAND_CACHE_FROM[@]}" )
 
+            if [ -n "${GO_PROXY_URL}" ]; then
+              COMMAND_TO_RUN+=( --build-arg "GOPROXY=${GO_PROXY_URL}" )
+            fi
+
             if [ -n "${BUILD_ARGS}" ]; then
               for build_arg in ${BUILD_ARGS}; do
                 COMMAND_TO_RUN+=( --build-arg "${build_arg}" )
               done
             fi
 
-            COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}/${image}:latest-${stage}" -f ./"${DOCKERFILES_DIR}"/"${image}"/Dockerfile --build-arg BUILDKIT_INLINE_CACHE=1  . )
+            COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}/${image}:latest-${stage}" -f ./"${DOCKERFILES_DIR}"/"${image}"/Dockerfile --build-arg BUILDKIT_INLINE_CACHE=1 "${DOCKER_CONTEXT_PATH}" )
 
             "${COMMAND_TO_RUN[@]}" || STATUS=1
 
@@ -134,6 +210,8 @@ build:cache:
               echo "Missing build target stage '${stage}' in Dockerfile for ${image}!"
             else
               docker push "${CI_REGISTRY_IMAGE}/${image}:latest-${stage}"
+              docker tag "${CI_REGISTRY_IMAGE}/${image}:latest-${stage}" "${CI_REGISTRY_IMAGE}/${image}:${CI_COMMIT_SHORT_SHA}-${stage}"
+              docker push "${CI_REGISTRY_IMAGE}/${image}:${CI_COMMIT_SHORT_SHA}-${stage}"
               COMMAND_CACHE_FROM+=( --cache-from "${CI_REGISTRY_IMAGE}/${image}:latest-${stage}" )
             fi
           done
@@ -142,8 +220,12 @@ build:cache:
       fi
   only:
     - /^v.+$/i
+    - /^qa.+$/i
     - master
     - merge_requests
+  except:
+    variables:
+      - $CI_FAST_TRACK == "true"
 
 build:latest:
   stage: build
@@ -153,6 +235,12 @@ build:latest:
     - |
       # DOCKER BUILD PHASE
 
+      DOCKER_CONTEXT_PATH="."
+
+      if [ -n "${DOCKER_CONTEXT}" ]; then
+        DOCKER_CONTEXT_PATH="$DOCKER_CONTEXT"
+      fi
+
       if [ -z "${IMAGES}" ]; then
 
         COMMAND_TO_RUN+=( docker build --cache-from "${CI_REGISTRY_IMAGE}":latest --cache-from "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" )
@@ -161,18 +249,37 @@ build:latest:
           COMMAND_TO_RUN+=( --cache-from "${CI_REGISTRY_IMAGE}:latest-${stage}" )
         done
 
+        if [ -n "${GO_PROXY_URL}" ]; then
+          COMMAND_TO_RUN+=( --build-arg "GOPROXY=${GO_PROXY_URL}" )
+        fi
+
         if [ -n "${BUILD_ARGS}" ]; then
           for build_arg in ${BUILD_ARGS}; do
             COMMAND_TO_RUN+=( --build-arg "${build_arg}" )
           done
         fi
 
-        COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}":latest --build-arg BUILDKIT_INLINE_CACHE=1 . )
+        PUBLISH_TARGET_BASE_COMMAND_TO_RUN=${COMMAND_TO_RUN[@]}
+
+        COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}":latest --build-arg BUILDKIT_INLINE_CACHE=1 "${DOCKER_CONTEXT_PATH}" )
 
         "${COMMAND_TO_RUN[@]}"
 
         docker push "${CI_REGISTRY_IMAGE}":latest
+
+        if [ -n "${PUBLISH_TARGETS}" ]; then
+          if [ "${ENABLE_PUBLISH_TARGETS_LATEST}" == "true" ]; then
+            for target in ${PUBLISH_TARGETS}; do
+              TARGET_IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}/${target}:latest"
+              PUBLISH_TARGET_COMMAND_TO_RUN=( ${PUBLISH_TARGET_BASE_COMMAND_TO_RUN[@]} -t "${TARGET_IMAGE_FULL_NAME}" --target "${target}" --build-arg BUILDKIT_INLINE_CACHE=1 "${DOCKER_CONTEXT_PATH}" )
+              "${PUBLISH_TARGET_COMMAND_TO_RUN[@]}"
+              docker push "${TARGET_IMAGE_FULL_NAME}"
+            done
+          fi
+        fi
+
       else
+
         if [ -z "${DOCKERFILES_DIR}" ]; then
           DOCKERFILES_DIR=docker
         fi
@@ -185,23 +292,45 @@ build:latest:
             COMMAND_TO_RUN+=( --cache-from "${CI_REGISTRY_IMAGE}/${image}:latest-${stage}" )
           done
 
+          if [ -n "${GO_PROXY_URL}" ]; then
+            COMMAND_TO_RUN+=( --build-arg "GOPROXY=${GO_PROXY_URL}" )
+          fi
+
           if [ -n "${BUILD_ARGS}" ]; then
             for build_arg in ${BUILD_ARGS}; do
               COMMAND_TO_RUN+=( --build-arg "${build_arg}" )
             done
           fi
 
-          COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}/${image}:latest" -f ./"${DOCKERFILES_DIR}/${image}"/Dockerfile --build-arg BUILDKIT_INLINE_CACHE=1 . )
+          PUBLISH_TARGET_BASE_COMMAND_TO_RUN=${COMMAND_TO_RUN[@]}
+
+          COMMAND_TO_RUN+=( -t "${CI_REGISTRY_IMAGE}/${image}:latest" -f ./"${DOCKERFILES_DIR}/${image}"/Dockerfile --build-arg BUILDKIT_INLINE_CACHE=1 "${DOCKER_CONTEXT_PATH}" )
 
           "${COMMAND_TO_RUN[@]}"
 
           docker push "${CI_REGISTRY_IMAGE}/${image}:latest"
+
+          if [ -n "${PUBLISH_TARGETS}" ]; then
+            if [ "${ENABLE_PUBLISH_TARGETS_LATEST}" == "true" ]; then
+              for target in ${PUBLISH_TARGETS}; do
+                TARGET_IMAGE_FULL_NAME="${CI_REGISTRY_IMAGE}/${image}/${target}:latest"
+                PUBLISH_TARGET_COMMAND_TO_RUN=( ${PUBLISH_TARGET_BASE_COMMAND_TO_RUN[@]} -t "${TARGET_IMAGE_FULL_NAME}" --target "${target}" -f "./${DOCKERFILES_DIR}/${image}/Dockerfile" --build-arg BUILDKIT_INLINE_CACHE=1 "${DOCKER_CONTEXT_PATH}" )
+                "${PUBLISH_TARGET_COMMAND_TO_RUN[@]}"
+                docker push "${TARGET_IMAGE_FULL_NAME}"
+              done
+            fi
+          fi
+
         done
       fi
   only:
     - /^v.+$/i
   except:
-    - branches
+    refs:
+      - branches
+    variables:
+      - $SKIP_CI_BUILD_LATEST == "true"
+      - $CI_FAST_TRACK == "true"
 
 push:
   stage: push
@@ -215,11 +344,35 @@ push:
         docker pull "${CI_REGISTRY_IMAGE}":"${CI_COMMIT_SHORT_SHA}"
         docker tag "${CI_REGISTRY_IMAGE}":"${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}":"${CI_COMMIT_TAG}"
         docker push "${CI_REGISTRY_IMAGE}":"${CI_COMMIT_TAG}"
+
+        if [ -n "${PUBLISH_TARGETS}" ]; then
+          if [ "${ENABLE_PUBLISH_TARGETS_TAG}" == "true" ]; then
+            for target in ${PUBLISH_TARGETS}; do
+              docker pull "${CI_REGISTRY_IMAGE}/${target}:${CI_COMMIT_SHORT_SHA}"
+              docker tag "${CI_REGISTRY_IMAGE}/${target}:${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}/${target}:${CI_COMMIT_TAG}"
+              docker push "${CI_REGISTRY_IMAGE}/${target}:${CI_COMMIT_TAG}"
+            done
+          fi
+        fi
+
       else
+
         for image in ${IMAGES}; do
+
           docker pull "${CI_REGISTRY_IMAGE}"/"${image}":"${CI_COMMIT_SHORT_SHA}"
           docker tag "${CI_REGISTRY_IMAGE}"/"${image}":"${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}"/"${image}":"${CI_COMMIT_TAG}"
           docker push "${CI_REGISTRY_IMAGE}"/"${image}":"${CI_COMMIT_TAG}"
+
+          if [ -n "${PUBLISH_TARGETS}" ]; then
+            if [ "${ENABLE_PUBLISH_TARGETS_TAG}" == "true" ]; then
+              for target in ${PUBLISH_TARGETS}; do
+                docker pull "${CI_REGISTRY_IMAGE}/${image}/${target}:${CI_COMMIT_SHORT_SHA}"
+                docker tag "${CI_REGISTRY_IMAGE}/${image}/${target}:${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}/${image}/${target}:${CI_COMMIT_TAG}"
+                docker push "${CI_REGISTRY_IMAGE}/${image}/${target}:${CI_COMMIT_TAG}"
+              done
+            fi
+          fi
+
         done
       fi
   variables:
@@ -227,4 +380,7 @@ push:
   only:
     - /^v.+$/i
   except:
-    - branches
+    refs:
+      - branches
+    variables:
+      - $SKIP_CI_PUSH == "true"

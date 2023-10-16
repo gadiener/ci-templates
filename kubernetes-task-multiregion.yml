@@ -1,0 +1,68 @@
+include:
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/v3.32.1/kubernetes-task-quality.yml'
+
+task:production:europe:
+  extends: .task
+  variables:
+    NAMESPACE: ${NAMESPACE_PRODUCTION_EUROPE}
+    GOOGLE_KEY: ${GOOGLE_KEY_PRODUCTION_EUROPE}
+    CLUSTER_NAME: ${CLUSTER_NAME_PRODUCTION_EUROPE}
+    CLUSTER_ZONE: ${CLUSTER_ZONE_PRODUCTION_EUROPE}
+    KUBERNETES_SCRIPT: ${KUBERNETES_SCRIPT_PRODUCTION_EUROPE}
+  before_script:
+    - |
+      # CHECK VARIABLES PHASE
+      for var in "GOOGLE_KEY_PRODUCTION_EUROPE" "CLUSTER_NAME_PRODUCTION_EUROPE" "CLUSTER_ZONE_PRODUCTION_EUROPE" "KUBERNETES_SCRIPT_PRODUCTION_EUROPE"; do
+          if [ -z "${!var}" ]; then
+            echo "Missing '${var}' variable!"
+            exit 1
+          fi
+      done
+  only:
+    - /^v.+$/i
+  except:
+    - branches
+
+task:production:america:
+  extends: .task
+  variables:
+    NAMESPACE: ${NAMESPACE_PRODUCTION_AMERICA}
+    GOOGLE_KEY: ${GOOGLE_KEY_PRODUCTION_AMERICA}
+    CLUSTER_NAME: ${CLUSTER_NAME_PRODUCTION_AMERICA}
+    CLUSTER_ZONE: ${CLUSTER_ZONE_PRODUCTION_AMERICA}
+    KUBERNETES_SCRIPT: ${KUBERNETES_SCRIPT_PRODUCTION_AMERICA}
+  before_script:
+    - |
+      # CHECK VARIABLES PHASE
+      for var in "GOOGLE_KEY_PRODUCTION_AMERICA" "CLUSTER_NAME_PRODUCTION_AMERICA" "CLUSTER_ZONE_PRODUCTION_AMERICA" "KUBERNETES_SCRIPT_PRODUCTION_AMERICA"; do
+          if [ -z "${!var}" ]; then
+            echo "Missing '${var}' variable!"
+            exit 1
+          fi
+      done
+  only:
+    - /^v.+$/i
+  except:
+    - branches
+
+task:production:asia:
+  extends: .task
+  variables:
+    NAMESPACE: ${NAMESPACE_PRODUCTION_ASIA}
+    GOOGLE_KEY: ${GOOGLE_KEY_PRODUCTION_ASIA}
+    CLUSTER_NAME: ${CLUSTER_NAME_PRODUCTION_ASIA}
+    CLUSTER_ZONE: ${CLUSTER_ZONE_PRODUCTION_ASIA}
+    KUBERNETES_SCRIPT: ${KUBERNETES_SCRIPT_PRODUCTION_ASIA}
+  before_script:
+    - |
+      # CHECK VARIABLES PHASE
+      for var in "GOOGLE_KEY_PRODUCTION_ASIA" "CLUSTER_NAME_PRODUCTION_ASIA" "CLUSTER_ZONE_PRODUCTION_ASIA" "KUBERNETES_SCRIPT_PRODUCTION_ASIA"; do
+          if [ -z "${!var}" ]; then
+            echo "Missing '${var}' variable!"
+            exit 1
+          fi
+      done
+  only:
+    - /^v.+$/i
+  except:
+    - branches

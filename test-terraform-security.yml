@@ -1,16 +1,22 @@
-
+---
 test:terraform-security:
+  extends: .terraform-security
+
   stage: test
-  image:
-    name: linuxbandit/terraform-with-tfsec:v0.12.24
-    entrypoint: [""]
+
   script:
     - |
       if [ -n "${TF_FOLDER_PATH}" ]; then
         cd "${TF_FOLDER_PATH}"
       fi
+
       terraform --version
+
       terraform init -backend=false
+
       tfsec .
-  variables:
-    GIT_DEPTH: 1
+
+  only:
+    - /^v.+$/i
+    - master
+    - merge_requests

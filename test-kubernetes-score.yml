@@ -1,6 +1,6 @@
 test:kubernetes-score:
   stage: test
-  image: gdiener/ci-image-gcp:v1.0.1
+  image: europe-west1-docker.pkg.dev/jobtome-platform/public/ci-image-gcp:v1.6.0
   script:
     - |
 
@@ -39,4 +39,7 @@ test:kubernetes-score:
       echo
       echo "-> Manifests scored!"
       echo
-
+  except:
+    variables:
+      - $SKIP_CI_TEST == "true"
+      - $CI_FAST_TRACK == "true"

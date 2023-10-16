@@ -1,8 +1,8 @@
 # Default CI templates
 
-This repo contains a series of templates that is used inside the CI/CD pipeline of JTM.
+This repo contains a series of templates that is used inside the CI/CD pipeline of Jobtome.
 
-The syntax here is valid for a Gitlab CI setup. Our current version of Gitlab is 12.9.0
+The syntax here is valid for a Gitlab CI setup. Our current version of Gitlab is 14.0.0
 
 At Jobtome, we use GCP as our Cloud provider, hence you can imagine a lot of pipelines are related/applicable to GCP. Also, we use three main regions for our services, so you will see a lot of references about that distinction.
 
@@ -70,38 +70,58 @@ my-project
 ...
 ```
 
-### How to use it
+### Underlying versions
+
+Docker:
+- `20.10` for tags > `v3.x.x`;
+- `19.03` for tags <= `v2.39.x`
+
+Terraform:
+- `1` for tags > `v2.39.x`;
+- `0.12.29` for tags <= `v2.38.x`
+
+
+### Index of how-tos
 
 According to the operation / the type of pipeline you have to perform, you can pick here different stages, and put the snippet as indicated in your `.gitlab-ci.yml`:
 
-- [Linting](#linting)
-- Tests
-  - [Docker-compose tests](#unit-test-stage)
-- [Docker pipeline](#docker-pipeline)
-  - Build
-  - Test for image vulnerabilities
-  - Push to registry
-- Kubernetes deployment
-  - [Deploy on quality (a.k.a. staging)](#kubernetes-quality-pipeline)
-  - [Regional deployment](#kubernetes-regional-pipeline)
-  - [Multi-regional deployment](#kubernetes-multiregion-pipeline)
-  - ["Simple script" execution](#kubernetes-"simple-script"-pipeline)
-  - [Note on configmaps](#note-on-configmaps)
-- [Helm deployment](#helm-deployment)
-- [Helm chart publishing](#helm-chart-publishing)
-- [SSH command](#ssh-command)
-- [Publishing on calendar](#publish-to-google-calendar-and-slack)
-- [Google bucket upload](#deploy-to-google-storage)
-- Serverless functions deployment
-  - [Quality deployment](#google-function-quality-pipeline)
-  - [Regional deployment](#google-function-regional-pipeline)
-  - [Multi-regional deployment](#google-function-multiregion-pipeline)
-- [Google endpoint](#google-endpoint)
-- [Google cloud run](#google-cloud-run)
-- [Google dataflow](#dataflow)
-- [Terraform pipeline](#terraform-pipeline)
-- [Terraform security check](#terraform-security-score)
-- [Notify sentry of release](#notify-sentry-of-release)
+- [Default CI templates](#default-ci-templates)
+  - [Pipeline order and workflow](#pipeline-order-and-workflow)
+    - [Folder structure](#folder-structure)
+    - [Underlying versions](#underlying-versions)
+    - [Index of how-tos](#index-of-how-tos)
+    - [How to use it](#how-to-use-it)
+  - [Linting](#linting)
+    - [Linting shell files](#linting-shell-files)
+    - [Linting python files](#linting-python-files)
+- [Unit test stage](#unit-test-stage)
+- [API test stage](#api-test-stage)
+  - [Docker pipeline](#docker-pipeline)
+    - [Alternative multi-stage build / caching](#alternative-multi-stage-build--caching)
+  - [Kubernetes quality pipeline](#kubernetes-quality-pipeline)
+  - [Kubernetes regional pipeline](#kubernetes-regional-pipeline)
+  - [Kubernetes multiregion pipeline](#kubernetes-multiregion-pipeline)
+    - [Note on configmaps](#note-on-configmaps)
+    - [Note on secrets](#note-on-secrets)
+  - [Kubernetes run script quality](#kubernetes-run-script-quality)
+  - [Kubernetes run script production](#kubernetes-run-script-production)
+  - [Helm deployment](#helm-deployment)
+    - [Helm chart publishing](#helm-chart-publishing)
+  - [SSH command](#ssh-command)
+  - [Publish to Google Calendar and Slack](#publish-to-google-calendar-and-slack)
+  - [Deploy to Google Storage](#deploy-to-google-storage)
+  - [Google function quality pipeline](#google-function-quality-pipeline)
+  - [Google function regional pipeline](#google-function-regional-pipeline)
+  - [Google function multiregion pipeline](#google-function-multiregion-pipeline)
+  - [Google endpoint](#google-endpoint)
+  - [Google Cloud Run Quality](#google-cloud-run-quality)
+  - [Google Cloud Run Production](#google-cloud-run-production)
+  - [Google Dataflow](#google-dataflow)
+  - [Terraform pipeline](#terraform-pipeline)
+  - [Terraform security score](#terraform-security-score)
+  - [Bash script execution](#bash-script-execution)
+  - [Notify sentry of release](#notify-sentry-of-release)
+- [General advices](#general-advices)
 
 Finally some [advice](#general-advices) on how to try the pipeline (for development).
 
@@ -197,6 +217,21 @@ variables:
   REVIEWDOG_LEVEL: warning # optional, values: info, warning, error
 ```
 
+### Linting python files
+
+```yaml
+include:
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/lint-python.yml'
+
+stages:
+  - lint
+
+variables:
+  IGNORE_PYTHON_LINT: "E10,D11,I12" #@see https://flake8.pycqa.org/en/latest/user/violations.html
+```
+
+The docker image allows use with reviewdog, like above, but the code has not been added yet. Contributions are welcome
+
 # Unit test stage
 
 ```yaml
@@ -211,7 +246,24 @@ variables:
   COMPOSER_FILE_NAME: "docker-compose.test.yml" #Default value
 ```
 
+This assumes testing to be done on the containerised application.
 This will spin up a `docker-compose.test.yml` and check the exit code of the container `app`. If the file is not named `docker-compose.test.yml`, or the test container is not named `app`, the variables are there to correct the names.
+
+# API test stage
+
+```yaml
+include:
+  remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/test-api.yml'
+
+stages:
+  - test
+
+variables:
+  TEST_FOLDER: "tests" #Default value
+  THREADS: "3" #Default value
+```
+
+This will run all the test definitions defined with BDD-syntax into [karate](https://github.com/intuit/karate)
 
 ## Docker pipeline
 
@@ -221,7 +273,6 @@ include:
 
 stages:
   - build
-  - test
   - push
 
 variables:
@@ -229,11 +280,112 @@ variables:
   STAGES: "build assets"
   DOCKERFILES_DIR: "docker"
   SKIP_DOCKER_CACHE: "false"
+  DOCKER_NAME_CONTAINS_BRANCH: "true" #optional
+  PUBLISH_TARGETS: "lint test"
+  GO_PROXY_URL: "<go-proxy-url>"
 ```
 
 All stages in Docker file should be named (e.g. `AS buildes`, `AS prod`...). These need to be added to `STAGES` variable. `IMAGES` variable defines the images that will be built, just delete the variable if a single image will be created. In this case the image will be named as `CI_REGISTRY_IMAGE`, othewise `CI_REGISTRY_IMAGE` will be a folder containing `IMAGES`.
 `DOCKERFILES_DIR` is used to specify a different folder containing Dockerfiles instead of the default root directory.
 
+This will spawn a job `build` and a job `build:cache`. NOTE: The cache created at pipeline N is used for the pipeline N+1
+
+_NOTE: Both stages, `build` and `push`, should be declared in the CI, in order for this template to work properly. Otherwise, you will get a Syntax Error._
+
+By enabling the flag `DOCKER_NAME_CONTAINS_BRANCH`, every branch built (so, by default, a branch which is undergoing MR) will have its own registry image in the following format:
+`registry.example.com/repo-path/repo-name/branch:tag` or `registry.example.com/repo-path/repo-name/branch/image:tag` (master branch is excluded from this).
+This is opposed to the 'usual'
+`registry.example.com/repo-path/repo-name:tag` or
+`registry.example.com/repo-path/repo-name/image:tag` (where classically, image:={app|nginx})
+
+The `PUBLISH_TARGETS` Flag accepts a list of strings, separated by spaces. Use this Flag to specify a list of Dockerfile Stages to be built and published to the Container Registry. Built and published specified stages will be tagged and available in the registry following the pattern: `registry.example.com/gitlab-org/gitlab-foss/<image>/<target>:<tag>`.
+
+Setting the `GO_PROXY_URL` Flag, will result in using the (Private) Go Proxy at specified URL, while downloading Go Modules for your application (e.g. `go mod download`). It will basically set the `GOPROXY` Environment Variable during the build of image(s).
+
+NB: when using this flag, remember that the gitlab's registry cleanup policy happens *per-directory* and not *globally* inside a project's registry.
+
+As of version `v3.1.0` we have introduced [this tool](https://github.com/jobtome-labs/docker-registry-cleaner) as helper for cleanup. It works by creating an "environment" (in Gitlab terms) which has an automatical teardown on merge. The teardown stage does cleanup of such directories in the Gitlab container registry.
+To use it, you need to include a new file and add the stages `deploy` and `stop`. Simply add:
+
+```
+include:
+  ...
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/docker-registry-cleanup.yml'
+
+stages:
+  ...
+  - deploy
+  - stop
+```
+
+### Alternative multi-stage build / caching
+
+`.docker:build:multi` template allows building a particular stage of a multi-stage Dockerfile with an optional cache facility. Unlike the other pipeline template, this cache is used within the same pipeline
+
+One can add the following to the .gitlab-ci:
+
+```
+stages:
+  ...
+  - build-cache # new!
+  - build
+  ...
+
+
+# this step should be run before running any other steps so that it results in a cached image that can be re-used in the next build stage
+build-cache:
+  extends: .docker:build:multi
+  stage: build-cache
+  variables:
+    # target stage name
+    BUILD_TARGET: base
+    # tag suffix to produce
+    IMAGE_TAG_SUFFIX: base
+
+build-prod:
+  extends: .docker:build:multi
+  stage: build
+  variables:
+    # defines the suffix of the cache image
+    CACHE_FROM: base
+    BUILD_TARGET: prod
+    # note, no IMAGE_TAG_SUFFIX defined - this will be the main image in the repo
+
+build-debug:
+  extends: .docker:build:multi
+  stage: build
+  variables:
+    CACHE_FROM: base
+    BUILD_TARGET: debug
+    IMAGE_TAG_SUFFIX: debug
+
+build-nginx:
+  extends: .docker:build:multi
+  stage: build
+  variables:
+    # note, no CACHE_FROM defined - this will be built without cache
+    BUILD_TARGET: nginx
+    IMAGE_TAG_SUFFIX: nginx
+```
+
+In natural language: there's a pipeline stage `build-cache` where the docker stage is built, and the following `build` pipeline stage has 3 jobs using the pre-built docker stage.
+
+```
+.docker:build:multi:
+  extends: .docker
+  stage: build
+  #variables:
+    #### Supported vars
+    #CACHE_FROM: base
+    #IMAGE_TAG_SUFFIX: debug
+    #BUILD_TARGET: prod
+```
+
+NOTE: this job assumes that the Dockerfile is ONE, and in the root of the project.
+
+This job does not override the jobs described above: to remove jobs `build` and `build:cache`, add to the .gitlab.ci.yml an override to never run them.
+
+Additionally, this job *by default* creates a docker image for every branch (see end of previous section)
 
 ## Kubernetes quality pipeline
 
@@ -345,7 +497,7 @@ variables:
   DOMAIN_PRODUCTION_ASIA: as.production.example.com
 ```
 
-## Note on configmaps
+### Note on configmaps
 In order to deploy configmaps at every run (not just after the manual stage of "manifest") one can use this code:
 
 1. Remember to add among the `variables:` the `BEFORE_CUSTOM_APPLY_FILE_PATH: "/tmp/before-manifest.yaml"`
@@ -414,6 +566,12 @@ deploy:production:europe:image:
   before_script:
     - *deployconfig
 ```
+
+### Note on secrets
+As of version v2.29.1 of the pipelines, Mozilla SOPS has been introduced to take care of secrets *inside of repositories* (encrypted).
+On the human side, don't forget to put git hooks to avoid commit of plaintext secrets.
+On the tech side, in order to use this new feature (which is optional), one needs to add in the gitlab variables a SOPS_KEY (a json of a service account with `Cloud KMS CryptoKey Decrypter` permission on the key), and a SOPS_CONF (containing the `.sops.yaml` configuration).
+
 
 ## Kubernetes run script quality
 
@@ -504,6 +662,70 @@ variables:
   ...
 ```
 
+In addition to these features, starting from `v2.29.3` you can enable review app on merge requests by including in the remotes:
+```
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/helm-branches.yaml'
+```
+and adding as the *last* stage `- stop`.
+
+Doing so will create a new helm deployment in QA based on the commit slug when the branch name starts with "feat". Once you're done, the branch deployment will be automatically deleted. This requires also to set up a values.yaml in the helm/feature/ folder (you may juspy quality one as a starting point).
+
+You need to place a helm/feature/values.yaml manifest to be used in helm deployment in feature branches. Initially you can copy/paste quality one, you can customize configmaps here to be review-app specific. You need to pay attention to the following keys:
+
+```
+backendconfig:
+  enabled: false
+
+frontendconfig:
+  enabled: true
+```
+
+```
+envFrom:
+  - envType: secret
+    envName: secret-environment
+  - envType: configmap
+    envName: ${APP_NAME}-environment
+```
+```
+configmaps:
+  - name: ${APP_NAME}-environment
+
+```
+
+Also remember to add the ingress definition in case the service is normally behind API gateway:
+
+```
+ingress:
+  enabled: true  #NO string
+  ignoreTest: false #optional, if false
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    external-dns.alpha.kubernetes.io/hostname: "${DOMAIN}"
+    external-dns.alpha.kubernetes.io/ttl: "200"
+    cert-manager.io/cluster-issuer: "production"
+    acme.cert-manager.io/http01-edit-in-place: "true"
+  # hosts:
+  #   - host: chart-example.local
+  #     paths: []
+  tls:
+  - secretName: "${APP_NAME}-tls"
+    hosts:
+      - "${DOMAIN}"
+```
+
+This feature can clone DBs (only MySQL at the moment) provided that:
+1. You provide DB_USERNAME, DB_PASSWORDd DB_HOSTd DB_NAME *or* DATABASE_URL (in the format mysql://user:pass@dbhost/dbname) inside the proper GITLAB CI/CD SECRET or SOPS secret
+2. The quality database user has CRUD and CREATE/DROP permissions
+
+You can also create a feature branch specific secret as a Gitlab CI/CD variable called SECRET_YAML_FEATURE, or an even more specific secret defined in gitlab-ci.yml as SECRET_BRANCH=whateverspecificsecretyouwant. Just please, use a a different "name:" for the configmap and the secrets, in order to avoid overwriting quality ones when appropriate.
+
+Branch domain and app name can be overriden in gitlab-ci.yml using these variables:
+
+DOMAIN_BRANCH: "mydomain.tld"
+APP_NAME_BRANCH: "myapp"
+
+
 ### Helm chart publishing
 
 This is for a repository which holds a Helm chart. It is triggered at every tag.
@@ -572,6 +794,14 @@ variables:
   SLACK_WEBHOOK_URL: <url>
 ```
 
+Optional customisations:
+```
+SLACK_USERNAME
+SLACK_NOTIFICATION_FOOTER
+SLACK_NOTIFICATION_ICON
+SLACK_ICON
+```
+
 ## Deploy to Google Storage
 
 ```yaml
@@ -629,6 +859,7 @@ variables:
   DOMAIN_QUALITY: https://us-central1.cloudfunctions.net/http_function
   SECRET_YAML_QUALITY: <secret base64 encoded>
   SECRET_ENV_LIST_QUALITY: "SUPERSECRET=env"
+  SECRET_MGR_LIST_QUALITY: "[SECRET_ENV_VAR=SECRET_VALUE_REF,/secret_path=SECRET_VALUE_REF,/mount_path:/secret_file_path=SECRET_VALUE_REF,…]"
 ```
 
 ## Google function regional pipeline
@@ -656,6 +887,7 @@ variables:
   DOMAIN_QUALITY: https://us-central1.cloudfunctions.net/http_function
   SECRET_YAML_QUALITY: <secret base64 encoded>
   SECRET_ENV_LIST_QUALITY: "SUPERSECRET=env"
+  SECRET_MGR_LIST_QUALITY: "[SECRET_ENV_VAR=SECRET_VALUE_REF,/secret_path=SECRET_VALUE_REF,/mount_path:/secret_file_path=SECRET_VALUE_REF,…]"
 
   # PRODUCTION VARIABLES
   SERVICE_ACCOUNT_PRODUCTION: default
@@ -666,6 +898,7 @@ variables:
   DOMAIN_PRODUCTION: https://us-central1.cloudfunctions.net/http_function
   SECRET_YAML_PRODUCTION: <secret base64 encoded>
   SECRET_ENV_LIST_PRODUCTION: "SUPERSECRET=env"
+  SECRET_MGR_LIST_PRODUCTION: "[SECRET_ENV_VAR=SECRET_VALUE_REF,/secret_path=SECRET_VALUE_REF,/mount_path:/secret_file_path=SECRET_VALUE_REF,…]"
 ```
 
 ## Google function multiregion pipeline
@@ -693,6 +926,7 @@ variables:
   DOMAIN_QUALITY: https://us-central1.cloudfunctions.net/http_function
   SECRET_YAML_QUALITY: <secret base64 encoded>
   SECRET_ENV_LIST_QUALITY: "SUPERSECRET=env"
+  SECRET_MGR_LIST_QUALITY: "[SECRET_ENV_VAR=SECRET_VALUE_REF,/secret_path=SECRET_VALUE_REF,/mount_path:/secret_file_path=SECRET_VALUE_REF,…]"
 
   # PRODUCTION EUROPE VARIABLES
   SERVICE_ACCOUNT_PRODUCTION_EUROPE: default
@@ -703,6 +937,7 @@ variables:
   DOMAIN_PRODUCTION_EUROPE: https://europe-west1.cloudfunctions.net/http_function
   SECRET_YAML_PRODUCTION_EUROPE: <secret base64 encoded>
   SECRET_ENV_LIST_PRODUCTION_EUROPE: "SUPERSECRET=env"
+  SECRET_MGR_LIST_PRODUCTION_EUROPE: "[SECRET_ENV_VAR=SECRET_VALUE_REF,/secret_path=SECRET_VALUE_REF,/mount_path:/secret_file_path=SECRET_VALUE_REF,…]"
 
   # PRODUCTION AMERICA VARIABLES
   SERVICE_ACCOUNT_PRODUCTION_AMERICA: default
@@ -713,6 +948,7 @@ variables:
   DOMAIN_PRODUCTION_AMERICA: https://us-central1.cloudfunctions.net/http_function
   SECRET_YAML_PRODUCTION_AMERICA: <secret base64 encoded>
   SECRET_ENV_LIST_PRODUCTION_AMERICA: "SUPERSECRET=env"
+  SECRET_MGR_LIST_PRODUCTION_AMERICA: "[SECRET_ENV_VAR=SECRET_VALUE_REF,/secret_path=SECRET_VALUE_REF,/mount_path:/secret_file_path=SECRET_VALUE_REF,…]"
 
   # PRODUCTION ASIA VARIABLES
   SERVICE_ACCOUNT_PRODUCTION_ASIA: default
@@ -723,6 +959,7 @@ variables:
   DOMAIN_PRODUCTION_ASIA: https://asia-east2.cloudfunctions.net/http_function
   SECRET_YAML_PRODUCTION_ASIA: <secret base64 encoded>
   SECRET_ENV_LIST_PRODUCTION_ASIA: "SUPERSECRET=env"
+  SECRET_MGR_LIST_PRODUCTION_ASIA: "[SECRET_ENV_VAR=SECRET_VALUE_REF,/secret_path=SECRET_VALUE_REF,/mount_path:/secret_file_path=SECRET_VALUE_REF,…]"
 ```
 
 ## Google endpoint
@@ -739,8 +976,38 @@ variables:
   ENDPOINT_FILE: endpoint.yaml
   GOOGLE_KEY: <google json key>
 ```
+## Google Cloud Run Quality
 
-## Google Cloud Run
+```yaml
+include:
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/cloudrun-quality.yml'
+
+stages:
+  - deploy
+
+variables:
+  GOOGLE_KEY_QUALITY: <google json key>
+  GOOGLE_PROJECT: my-project
+  CLUSTER_NAME_QUALITY: "quality"
+  CLUSTER_ZONE_QUALITY: "europe-west1-b"
+  NAMESPACE: my-k8s-namespace-where-cloudrun-is
+  SERVICE_NAME: awesome-service
+  CONNECTIVITY: "external"
+  TIMEOUT: "60s"
+  CONCURRENCY: "80"
+  CPU: "1000m"
+  MEMORY: "128M"
+  MAX_INSTANCES: "3"
+  ENV_QUALITY: "KEY1=value1,KEY2=value2"
+  SECRET_YAML_QUALITY: <some b64 of a secret called myapp-serviceaccounts>
+  SECRET_MOUNTS: "/secrets=myapp-serviceaccounts"
+  CONFIGMAP_PATH_QUALITY: <a path in this repo containing the definition of a configmap called myapp-configmap>
+  CONFIGMAP_MOUNTS: "/configs=myapp-configmap"
+```
+
+Read more detail about how to mount secrets/configmaps [here](https://github.com/jobtome-labs/ci-templates/pull/47)
+
+## Google Cloud Run Production
 
 ```yaml
 include:
@@ -753,18 +1020,29 @@ variables:
   GOOGLE_KEY_QUALITY: <google json key>
   GOOGLE_KEY_PRODUCTION: <google json key>
   GOOGLE_PROJECT: my-project
+  CLUSTER_NAME_QUALITY: "quality"
+  CLUSTER_ZONE_QUALITY: "europe-west1-b"
+  CLUSTER_NAME_PRODUCTION: "production"
+  CLUSTER_ZONE_PRODUCTION: "europe-west1-b"
+  NAMESPACE: my-k8s-namespace-where-cloudrun-is
   SERVICE_NAME: awesome-service
-  NAMESPACE: awesome-service
-  CLUSTER_NAME: quality
-  CLUSTER_ZONE: europe-west1b
   CONNECTIVITY: "external"
   TIMEOUT: "60s"
   CONCURRENCY: "80"
   CPU: "1000m"
   MEMORY: "128M"
   MAX_INSTANCES: "3"
-  ENV: "KEY1=value1,KEY2=value2"
+  ENV_QUALITY: "KEY1=value1,KEY2=value2"
+  ENV_PRODUCTION: "KEY1=valueProd1,KEY2=valueProd2"
+  SECRET_YAML_QUALITY: <some b64 of a secret called myapp-serviceaccounts>
+  SECRET_YAML_PRODUCTION: <some b64 of a secret called myapp-serviceaccounts>
+  SECRET_MOUNTS: "/secrets=myapp-serviceaccounts"
+  CONFIGMAP_PATH_QUALITY: <a path in this repo containing the definition of a configmap called myapp-configmap>
+  CONFIGMAP_PATH_PRODUCTION: <a path in this repo containing the definition of a configmap called myapp-configmap>
+  CONFIGMAP_MOUNTS: "/configs=myapp-configmap"
 ```
+
+Read more detail about how to mount secrets/configmaps [here](https://github.com/jobtome-labs/ci-templates/pull/47)
 
 ## Google Dataflow
 
@@ -822,6 +1100,24 @@ include:
 stages:
   - test
 ```
+
+## Bash script execution
+
+It could be useful to have a script executed through a pipeline. This enables code reviews, programmatic execution (of the script, and of checks beforehands), and avoids 'works on my machine' cases. Our most prominent use-case is when we have to work on the terraform state.
+```yaml
+include:
+  - remote: 'https://raw.githubusercontent.com/jobtome-labs/ci-templates/<REF>/shell-job.yml'
+
+stages:
+  - lint
+  - deploy
+```
+
+NOTE:
+- the file does not need to be executable, the pipeline will do `chmod +x`
+- the script name to be launched (e.g. `test-script.sh`) MUST be passed as variable with name `SCRIPT_NAME` in the 'manual' deploy phase (see picture). If the script needs it, a variable `ARGUMENTS` can also be passed. The receiving script must know how to use them!
+
+![Example of gitlab](gitlab-manual.jpg)
 
 ## Notify sentry of release
 

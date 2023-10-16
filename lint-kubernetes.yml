@@ -1,6 +1,6 @@
 lint:kubernetes:
   stage: lint
-  image: garethr/kubeval:0.14.0
+  image: europe-west1-docker.pkg.dev/jobtome-platform/public/garethr-kubeval:0.14.0
   script:
     - |
       if [[ "${KUBEVAL_RUN_STRICT}" == "1" ]]; then
@@ -40,3 +40,7 @@ lint:kubernetes:
       echo
       echo "-> Manifests checked!"
       echo
+  except:
+    variables:
+      - $SKIP_CI_LINT == "true"
+      - $CI_FAST_TRACK == "true"

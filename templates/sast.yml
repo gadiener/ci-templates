@@ -1,0 +1,14 @@
+---
+.sast:
+  stage: sast
+  services:
+    - docker:20-dind
+  only:
+    - master
+    - main
+    - /^v.+$/i
+    - /^qa.+$/i
+  except:
+    variables:
+      - $SKIP_SAST == "true"
+  allow_failure: true

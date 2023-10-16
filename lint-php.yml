@@ -1,6 +1,6 @@
 lint:php:
   stage: lint
-  image: cytopia/phplint:7.3
+  image: europe-west1-docker.pkg.dev/jobtome-platform/public/cytopia-phplint:7.3
   script:
     - |
 
@@ -14,3 +14,7 @@ lint:php:
       echo
       echo "-> Code checked!"
       echo
+  except:
+    variables:
+      - $SKIP_CI_LINT == "true"
+      - $CI_FAST_TRACK == "true"

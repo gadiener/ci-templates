@@ -1,0 +1,31 @@
+---
+include:
+  - remote: "https://raw.githubusercontent.com/jobtome-labs/ci-templates/v3.32.1/templates/container-registry-push.yml"
+
+container-registry:push:quality:
+  extends: .container-registry:push
+
+  stage: push
+
+  variables:
+    SOURCE_IMAGE_TAG: ${CI_COMMIT_SHORT_SHA}
+    DESTINATION_IMAGE_TAG: ${CI_COMMIT_SHORT_SHA}
+
+  only:
+    - master
+    - main
+    - /^qa.+$/i
+
+container-registry:push:production:
+  extends: .container-registry:push
+
+  stage: push
+
+  variables:
+    SOURCE_IMAGE_TAG: ${CI_COMMIT_SHORT_SHA}
+    DESTINATION_IMAGE_TAG: ${CI_COMMIT_TAG}
+
+  only:
+    - /^v.+$/i
+  except:
+    - branches

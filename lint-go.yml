@@ -1,40 +1,11 @@
+---
+include:
+  - remote: "https://raw.githubusercontent.com/jobtome-labs/ci-templates/v3.32.1/templates/lint.yml"
+
 lint:go:
-  stage: lint
-  image: gadiener/golint-reviewdog:v1.0.0
-  variables:
-    GITLAB_API: ${CI_API_V4_URL}
+  extends: .lint
+
+  image: "${CI_REGISTRY_IMAGE}/${APP_LINT_IMAGE_NAME}:${CI_COMMIT_SHORT_SHA}"
+
   script:
-    - |
-      echo
-      echo "-> Linting Go files:"
-      echo
-
-      if [ -z "${LINT_PATH}" ]; then
-        LINT_PATH="./..."
-      fi
-
-      if [ "${ENABLE_REVIEWDOG}" = "1" ]; then
-        echo
-        echo "-> Enabled Review Dog!"
-        echo
-
-        if [ -z "${REVIEWDOG_GITLAB_API_TOKEN}" ]; then
-          echo
-          echo "-> [WARNING] Missing 'REVIEWDOG_GITLAB_API_TOKEN' variable!"
-          echo
-          exit 1
-        fi
-
-        if [ -z "${REVIEWDOG_LEVEL}" ]; then
-          REVIEWDOG_LEVEL="warning"
-        fi
-
-        golint "${LINT_PATH}" | reviewdog -name="Go Linter" \
-          -f=golint -diff="git diff master" -reporter=gitlab-mr-discussion -level="${REVIEWDOG_LEVEL}"
-      else
-        golint "${LINT_PATH}"
-      fi
-
-      echo
-      echo "-> Go files checked!"
-      echo
+    - golangci-lint --verbose --timeout=5m run ./...

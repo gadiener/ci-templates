@@ -53,3 +53,7 @@ test:docker-security:
     - /^v.+$/i
     - master
     - merge_requests
+  except:
+    variables:
+      - $SKIP_CI_TEST == "true"
+      - $CI_FAST_TRACK == "true"

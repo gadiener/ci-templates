@@ -1,13 +1,13 @@
 lint:docker:
   stage: lint
-  image: linuxbandit/hadolint-reviewdog:v1.0.0
+  image: europe-west1-docker.pkg.dev/jobtome-platform/public/hadolint-reviewdog:v1.0.0
   script:
     - |
 
       COMMAND_TO_RUN="hadolint"
       COMMAND_TO_RUN+=( --trusted-registry "docker.io" --trusted-registry "${CI_REGISTRY}" )
 
-      if [[ -n "${IGNORE_DOCKER_LINT}" ]]; then
+      if [[ -z "${IGNORE_DOCKER_LINT}" ]]; then
         IGNORE_DOCKER_LINT=( DL3012 )
       fi
       for ign in "${IGNORE_DOCKER_LINT[@]}"; do
@@ -59,3 +59,7 @@ lint:docker:
       echo
       echo "-> Dockerfile(s) checked!"
       echo
+  except:
+    variables:
+      - $SKIP_CI_LINT == "true"
+      - $CI_FAST_TRACK == "true"

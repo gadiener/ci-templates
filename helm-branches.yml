@@ -1,0 +1,223 @@
+---
+deploy:review-app:helm:
+  image: europe-west1-docker.pkg.dev/jobtome-platform/public/helm:v3.12.3
+
+  stage: deploy
+
+  variables:
+    GOOGLE_KEY: ${GOOGLE_KEY_QUALITY}
+    CLUSTER_NAME: ${CLUSTER_NAME_QUALITY}
+    CLUSTER_ZONE: ${CLUSTER_ZONE_QUALITY}
+    NAMESPACE: ${NAMESPACE_QUALITY}
+    CI_COMMIT_TAG: ${CI_COMMIT_SHORT_SHA}
+
+  script:
+    - &check_variables |
+
+      # CHECKING VARIABLES PHASE
+
+      for var in "GOOGLE_KEY_QUALITY" "CLUSTER_NAME_QUALITY" "CLUSTER_ZONE_QUALITY" "NAMESPACE_QUALITY"; do
+        if [ -z "${!var}" ]; then
+          echo "Missing '${var}' Variable!"
+          exit 1
+        fi
+      done
+
+    - &activate |
+
+      # ACTIVATION PHASE
+
+      echo "${GOOGLE_KEY}" > /tmp/key.json
+
+      gcloud auth activate-service-account --key-file /tmp/key.json
+
+      gcloud config set project "${GOOGLE_PROJECT}"
+
+      echo
+      echo "-> Google Project '${GOOGLE_PROJECT}' Configured."
+      echo
+
+    - &connect |
+
+      # CLUSTER CONNECTION PHASE
+
+      gcloud container clusters get-credentials --zone "${CLUSTER_ZONE}" "${CLUSTER_NAME}"
+
+      kubectl config set-context $(kubectl config current-context) --namespace="${NAMESPACE}"
+
+      echo
+      echo "-> Namespace '$(kubectl config view --minify --output jsonpath={..namespace})' Configured."
+      echo
+      kubectl cluster-info
+      echo
+
+    - &init_variables |
+
+      # INITIALIZE VARIABLES
+
+      if [ -n "${DOMAIN_REVIEW_APP}" ]; then
+        export DOMAIN=${DOMAIN_REVIEW_APP}
+      else
+        export DOMAIN=${CI_MERGE_REQUEST_ID}.${DOMAIN_QUALITY}
+      fi
+
+      echo
+      echo "-> DOMAIN '${DOMAIN}'"
+      echo
+
+      if [ -n "${APP_NAME_REVIEW_APP}" ]; then
+        export APP_NAME=${APP_NAME_REVIEW_APP}
+      else
+        export APP_NAME=${APP_NAME}-${CI_MERGE_REQUEST_ID}
+      fi
+
+      echo
+      echo "-> APP_NAME '${APP_NAME}'"
+      echo
+
+    - &environment |
+
+      # CHECK PATHS
+
+      if [ -z "${HELM_DIR}" ]; then
+        HELM_DIR=helm
+      fi
+
+      HELM_FILES_PATH="${HELM_DIR}/review-app"
+
+      if [ -n "${ENVIRONMENT_REVIEW_APP}" ]; then
+        HELM_FILES_PATH="${HELM_DIR}/${ENVIRONMENT_REVIEW_APP}"
+      fi
+
+      if [ -d "${HELM_FILES_PATH}" ]; then
+
+        echo
+        echo "-> Getting Values from Location '${HELM_FILES_PATH}'."
+        echo
+
+      else
+
+        echo
+        echo "-> [ERROR] Unable to find Values at Location '${HELM_FILES_PATH}'."
+        echo "-> [ERROR] Invalid Directory Path."
+        echo
+
+        exit 1
+
+      fi
+
+      envsubst < "${HELM_FILES_PATH}/values.yaml" > /tmp/values.yaml
+
+    - &helm_chart_setup |
+
+      # HELM CHART SETUP
+
+      helm repo add jobtome "${CHARTS_URL}"
+      helm repo update
+
+      echo
+      helm search repo "jobtome/${CHART_NAME}"
+      echo
+
+      if [ -z "${CHART_VERSION}" ]; then
+        CHART_VERSION=$(helm search repo "jobtome/${CHART_NAME}" | tail -n 1 | awk '{print $2}')
+      fi
+
+      echo "-> Chart Version '${CHART_VERSION}'"
+
+      if [ -z "${TIMEOUT}" ]; then
+        TIMEOUT=600s
+      fi
+
+    - &helm_apply |
+
+      # HELM INSTALL / UPGRADE
+
+      WAIT="5s"
+
+      helm status "${APP_NAME}" > /dev/null 2>&1 || WAIT="10m"
+
+      if [ -f "${HELM_FILES_PATH}/app-secrets.yaml" ]; then
+
+        echo
+        echo "-> Application Secrets Detected at Path \"${HELM_FILES_PATH}/app-secrets.yaml\"."
+        echo "-> Decrypting and Passing to Helm as Values."
+        echo
+
+        echo "${SOPS_KEY}" > /tmp/sops.json
+
+        GOOGLE_APPLICATION_CREDENTIALS=/tmp/sops.json sops --decrypt "${HELM_FILES_PATH}/app-secrets.yaml" | helm upgrade --install --atomic "${APP_NAME}" "jobtome/${CHART_NAME}" --wait --timeout "${TIMEOUT}" -f /tmp/values.yaml --namespace "${NAMESPACE}" --version ${CHART_VERSION} --values -
+
+      else
+
+        echo
+        echo "-> No Application Secrets Detected at Path \"${HELM_FILES_PATH}/app-secrets.yaml\"."
+        echo "-> Assuming No App Secrets for this Project. Ignore."
+        echo
+
+        helm upgrade --install --atomic "${APP_NAME}" "jobtome/${CHART_NAME}" --wait --timeout "${TIMEOUT}" -f /tmp/values.yaml --namespace "${NAMESPACE}" --version ${CHART_VERSION}
+
+      fi
+
+      if [ $WAIT == "10m" ]; then
+        echo "Seems like it's the First Release."
+        echo "Waiting 10 Minutes for the Google Load Balancer to update .."
+      fi
+
+      sleep $WAIT
+
+      echo
+      echo "-> Application '${APP_NAME}' released."
+      echo "-> Current Version is '${CHART_VERSION}'."
+      echo
+
+  environment:
+    name: review/${ENVIRONMENT_NAME_REVIEW_APP}
+    url: https://${DOMAIN_REVIEW_APP}
+    auto_stop_in: 2 weeks
+    on_stop: stop:review-app:helm
+
+  rules:
+    - if: ($ENABLE_REVIEW_APPS == "true") && ($CI_COMMIT_REF_NAME =~ /^review/) && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master") && (($CI_PIPELINE_SOURCE == "merge_request_event") || ($CI_PIPELINE_SOURCE == "parent_pipeline"))
+
+stop:review-app:helm:
+  image: europe-west1-docker.pkg.dev/jobtome-platform/public/helm:v3.12.3
+
+  stage: stop
+
+  variables:
+    GOOGLE_KEY: ${GOOGLE_KEY_QUALITY}
+    CLUSTER_NAME: ${CLUSTER_NAME_QUALITY}
+    CLUSTER_ZONE: ${CLUSTER_ZONE_QUALITY}
+    NAMESPACE: ${NAMESPACE_QUALITY}
+    CI_COMMIT_TAG: ${CI_COMMIT_SHORT_SHA}
+
+  script:
+    - *check_variables
+    - *activate
+    - *connect
+    - *init_variables
+
+    - &helm_uninstall |
+
+      # HELM UNINSTALL
+
+      if [ -z "${TIMEOUT}" ]; then
+        TIMEOUT=600s
+      fi
+
+      helm uninstall "${APP_NAME}" --namespace "${NAMESPACE}" --timeout "${TIMEOUT}"
+
+      echo
+      echo "-> Application '${APP_NAME}' uninstalled successfully."
+      echo
+
+  environment:
+    name: review/${ENVIRONMENT_NAME_REVIEW_APP}
+    action: stop
+
+  rules:
+    - if: ($ENABLE_REVIEW_APPS == "true") && ($CI_COMMIT_REF_NAME =~ /^review/) && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master") && (($CI_PIPELINE_SOURCE == "merge_request_event") || ($CI_PIPELINE_SOURCE == "parent_pipeline"))
+      when: manual
+
+  allow_failure: true

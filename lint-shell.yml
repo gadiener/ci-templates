@@ -1,6 +1,6 @@
 lint:shell:
   stage: lint
-  image: linuxbandit/shellcheck-reviewdog:v1.0.0
+  image: europe-west1-docker.pkg.dev/jobtome-platform/public/shellcheck-reviewdog:v1.0.0
   variables:
     GITLAB_API: ${CI_API_V4_URL}
   script:
@@ -40,3 +40,7 @@ lint:shell:
       echo
       echo "-> Shell files checked!"
       echo
+  except:
+    variables:
+      - $SKIP_CI_LINT == "true"
+      - $CI_FAST_TRACK == "true"

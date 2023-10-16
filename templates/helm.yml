@@ -1,15 +1,20 @@
-
+---
 .helm:
-  image: devth/helm:v3.1.1
+  image: europe-west1-docker.pkg.dev/jobtome-platform/public/helm:v3.12.3
 
 .helm:deploy:
   extends: .helm
+
   stage: deploy
+
   variables:
     GIT_DEPTH: 1
+
   script:
     - &checkvars |
-      #CHECKING VARIABLES PHASE
+
+      # CHECKING VARIABLES PHASE
+
       for var in "GOOGLE_KEY" "CLUSTER_ZONE" "CLUSTER_NAME" "NAMESPACE" "APP_NAME" "PART_OF" "GOOGLE_PROJECT" "CHARTS_URL" "CHART_NAME"; do
           if [ -z "${!var}" ]; then
             echo
@@ -18,8 +23,10 @@
             exit 1
           fi
       done
+
     - &activate |
-      # ACTIVATION  PHASE
+
+      # ACTIVATION PHASE
 
       echo "${GOOGLE_KEY}" > /tmp/key.json
 
@@ -30,7 +37,9 @@
       echo
       echo "-> Google project '${GOOGLE_PROJECT}' configured!"
       echo
+
     - &connect |
+
       # CLUSTER CONNECTION PHASE
 
       gcloud container clusters get-credentials --zone "${CLUSTER_ZONE}" "${CLUSTER_NAME}"
@@ -43,11 +52,20 @@
       kubectl cluster-info
       echo
 
-    - |
+    - &environment |
+
       # CHECK PATHS
 
       if [ -z "${HELM_DIR}" ]; then
         HELM_DIR=helm
+      fi
+
+      if [ -z "${ENVIRONMENT}" ]; then
+        ENVIRONMENT=production
+      fi
+
+      if [ -d "${HELM_DIR}/${ENVIRONMENT_NAME}" ]; then
+        ENVIRONMENT=${ENVIRONMENT_NAME}
       fi
 
       if [ -d "${HELM_DIR}/${ENVIRONMENT}" ]; then
@@ -55,6 +73,7 @@
         echo "-> Getting manifests from directory '${ENVIRONMENT}'"
         echo
         envsubst < "${HELM_DIR}"/"${ENVIRONMENT}"/values.yaml > /tmp/values.yaml
+        HELM_FILES_PATH="${HELM_DIR}/${ENVIRONMENT}"
       fi
 
       if [ -n "${ENVIRONMENT_PATH}" ] && [ "${ENVIRONMENT_PATH}" != "${ENVIRONMENT}" ]; then
@@ -63,6 +82,7 @@
             echo "-> Getting manifests from directory '${ENVIRONMENT_PATH}'"
             echo
             envsubst < "${HELM_DIR}"/"${ENVIRONMENT_PATH}"/values.yaml > /tmp/values.yaml
+            HELM_FILES_PATH="${HELM_DIR}/${ENVIRONMENT_PATH}"
           else
             echo
             echo "-> [WARNING] Enviroment directory in '${ENVIRONMENT_PATH}' doesn't exist!"
@@ -70,12 +90,32 @@
           fi
       fi
 
-      # SECRETS APPLICATION
+    - &secrets-apply |
 
-      if [ -n "${SECRET_YAML}" ]; then
+      # SECRETS APPLICATION
+      # PRIORITY: File in Repository (if any); Otherwise, SECRET_YAML Variable;
+
+      if [ ! -f "${HELM_FILES_PATH}/secrets.yaml" ] && [ -z "${SECRET_YAML}" ]; then
+        echo
+        echo "-> [WARN] No secret to apply!"
+        echo
+      else
         touch /tmp/secrets.yaml
 
-        echo "${SECRET_YAML}" | base64 -d > /tmp/secrets.yaml
+        if [ -f "${HELM_FILES_PATH}/secrets.yaml" ]; then
+          if [ -z "${SOPS_KEY}" ] || [ -z "${SOPS_CONF}" ]; then
+            echo "[WARN] Cannot apply secrets: missing sops key or conf"
+          else
+            echo "${SOPS_CONF}" > /tmp/.sops.yaml
+            echo "${SOPS_KEY}" > /tmp/sops.json
+            GOOGLE_APPLICATION_CREDENTIALS=/tmp/sops.json sops --config /tmp/.sops.yaml -d "${HELM_FILES_PATH}/secrets.yaml" > /tmp/secrets.yaml
+          fi
+        fi
+
+        if [ -n "${SECRET_YAML}" ]; then
+          echo "${SECRET_YAML}" | base64 -d >> /tmp/secrets.yaml
+        fi
+
         envsubst < /tmp/secrets.yaml > /tmp/secrets.yaml.tmp && mv /tmp/secrets.yaml.tmp /tmp/secrets.yaml
 
         kubectl apply -f /tmp/secrets.yaml
@@ -83,19 +123,20 @@
         echo
         echo "-> Secrets deployed!"
         echo
-      else
-        echo
-        echo "-> Missing 'SECRET_YAML' variable!"
-        echo
       fi
 
+    - &helmsetup |
+
       # HELM APPLICATION
+
       helm repo add current-repo "${CHARTS_URL}"
       helm repo update
 
       echo
       helm search repo current-repo/"${CHART_NAME}"
       echo
+
+      echo "Chart version - ${CHART_VERSION}"
 
       if [ -z "${CHART_VERSION}" ]; then
         CHART_VERSION=$(helm search repo current-repo/"${CHART_NAME}" | tail -n 1 | awk '{print $2}')
@@ -105,28 +146,86 @@
         TIMEOUT=600s
       fi
 
-      helm upgrade --install --atomic "${APP_NAME}" "current-repo/${CHART_NAME}" --wait --timeout "${TIMEOUT}" -f /tmp/values.yaml --namespace "${NAMESPACE}" --version ${CHART_VERSION}
-      sleep 5
+    - &helmapply |
+
+      # HELM INSTALL / UPGRADE
+      # NOTE: If it's the First Helm Release, Wait 10 minutes for the Ingress to update.
+
+      WAIT="5s"
+
+      helm status "${APP_NAME}" > /dev/null 2>&1 || WAIT="10m"
+
+      if [ -f "${HELM_FILES_PATH}/app-secrets.yaml" ]; then
+        echo "Application Secrets Detected (at Path \"${HELM_FILES_PATH}/app-secrets.yaml\")."
+        echo "${SOPS_KEY}" > /tmp/sops.json
+        GOOGLE_APPLICATION_CREDENTIALS=/tmp/sops.json sops --decrypt "${HELM_FILES_PATH}/app-secrets.yaml" | helm upgrade --install --atomic "${APP_NAME}" "current-repo/${CHART_NAME}" --wait --timeout "${TIMEOUT}" -f /tmp/values.yaml --namespace "${NAMESPACE}" --version ${CHART_VERSION} --values -
+      else
+        echo "No Application Secrets Detected (at Path \"${HELM_FILES_PATH}/app-secrets.yaml\")."
+        helm upgrade --install --atomic "${APP_NAME}" "current-repo/${CHART_NAME}" --wait --timeout "${TIMEOUT}" -f /tmp/values.yaml --namespace "${NAMESPACE}" --version ${CHART_VERSION}
+      fi
+
+      if [ $WAIT == "10m" ]; then
+        echo "Seems like it's the First Release."
+        echo "Waiting 10 Minutes for the Ingress to update .."
+      fi
+
+      sleep $WAIT
 
       echo
       echo "-> App ${APP_NAME} released! Chart version is ${CHART_VERSION}"
       echo
 
-deploy:quality:helm:
+    - &custom-manifests-apply |
+
+      # APPLY CUSTOM MANIFESTS
+
+      if [ -n "${CUSTOM_MANIFESTS_SUBPATH}" ]; then
+
+        CUSTOM_MANIFESTS_PATH="${HELM_DIR}/${ENVIRONMENT}/${CUSTOM_MANIFESTS_SUBPATH}"
+
+        echo
+        echo " *** Applying Custom Kubernetes Manifests at Path \"${CUSTOM_MANIFESTS_PATH}\" ..."
+        echo
+
+        kubectl apply -f "${CUSTOM_MANIFESTS_PATH}"
+
+        echo
+        echo " *** Done."
+        echo
+
+      fi
+
+  retry: 1
+
+.deploy:quality:helm:
   extends: .helm:deploy
   only:
     - master
+    - /^qa.+$/i
   environment:
     name: ${ENVIRONMENT_NAME}
     url: https://${DOMAIN}
 
-
 .deploy:production:helm:
   extends: .helm:deploy
+
   only:
     - /^v.+$/i
   except:
     - branches
+
+  environment:
+    name: ${ENVIRONMENT_NAME}
+    url: https://${DOMAIN}
+
+.deploy:internal:helm:
+  extends: .helm:deploy
+
+  only:
+    - /^v.+$/i
+  except:
+    - branches
+
   environment:
     name: ${ENVIRONMENT_NAME}
     url: https://${DOMAIN}
@@ -171,3 +270,113 @@ deploy:quality:helm:
 
         exit 1
       fi
+
+.stop:
+  extends: .helm
+  variables:
+    GIT_STRATEGY: none
+  rules:
+    - if: $CI_MERGE_REQUEST_ID && $CI_COMMIT_REF_NAME =~ /^feat/
+      when: manual
+  script:
+    - echo "Remove feature branch app"
+    - *checkvars
+    - *activate
+    - *connect
+    - *environment
+    - *helmsetup
+    - |
+      # HELM TEST
+
+      echo
+      echo "-> Removing ${APP_NAME} ! Version of the tests: ${CHART_VERSION}"
+      echo
+
+      if [ -z "${TIMEOUT}" ]; then
+        TIMEOUT=600s
+      fi
+
+      STATUS=0
+
+      helm delete "${APP_NAME}" --namespace "${NAMESPACE}" || STATUS=1;
+
+      if [ "${STATUS}" = "1" ]; then
+        echo
+        echo "-> Removal has failed on ${ENVIRONMENT} for '${APP_NAME}' !"
+        echo
+        exit 1
+      fi
+
+.helm:diff:
+  extends: .helm
+
+  stage: test
+
+  variables:
+    GIT_DEPTH: 1
+
+  script:
+    - *checkvars
+    - *activate
+    - *connect
+    - *environment
+    - *helmsetup
+
+    - |
+
+      # HELM DIFF PLUGIN INSTALLATION
+
+      helm plugin uninstall diff
+
+      helm plugin install https://github.com/databus23/helm-diff --version="v3.4.2"
+
+    - |
+
+      # RUN HELM DIFF
+
+      LAST_RELEASE_IMAGE_TAG=$(helm get values "${APP_NAME}" | yq eval-all ".image.tag" -)
+
+      if [ -f "${HELM_FILES_PATH}/app-secrets.yaml" ]; then
+        echo "Application Secrets Detected (at Path \"${HELM_FILES_PATH}/app-secrets.yaml\")."
+        echo "${SOPS_KEY}" > /tmp/sops.json
+        GOOGLE_APPLICATION_CREDENTIALS=/tmp/sops.json sops --decrypt "${HELM_FILES_PATH}/app-secrets.yaml" > /tmp/secret-values.yaml
+        BASE_COMMAND=( helm diff upgrade "${APP_NAME}" "current-repo/${CHART_NAME}" --version="${CHART_VERSION}" --values="/tmp/values.yaml" --values="/tmp/secret-values.yaml" --set="image.tag=${LAST_RELEASE_IMAGE_TAG}" --namespace="${NAMESPACE}" --allow-unreleased --normalize-manifests --show-secrets=false )
+      else
+        echo "No Application Secrets Detected (at Path \"${HELM_FILES_PATH}/app-secrets.yaml\")."
+        BASE_COMMAND=( helm diff upgrade "${APP_NAME}" "current-repo/${CHART_NAME}" --version="${CHART_VERSION}" --values="/tmp/values.yaml" --set="image.tag=${LAST_RELEASE_IMAGE_TAG}" --namespace="${NAMESPACE}" --allow-unreleased --normalize-manifests --show-secrets=false )
+      fi
+
+      COMMAND_DIFF_LONG=( ${BASE_COMMAND[@]} --output=diff )
+      COMMAND_DIFF_SHORT=( ${BASE_COMMAND[@]} --output=diff --context=3 )
+      COMMAND_JSON=( ${BASE_COMMAND[@]} --output=json )
+      COMMAND_SIMPLE=( ${BASE_COMMAND[@]} --output=simple )
+
+      echo
+      echo "---"
+
+      ${COMMAND_DIFF_LONG[@]} > "helm-diff.long"
+
+      echo
+      echo "---"
+
+      ${COMMAND_DIFF_SHORT[@]} | tee "helm-diff.short"
+
+      echo
+      echo "---"
+
+      ${COMMAND_JSON[@]} | tee "helm-diff.json"
+
+      echo
+      echo "---"
+
+      ${COMMAND_SIMPLE[@]} | tee "helm-diff.simple"
+
+      echo
+      echo "---"
+
+  allow_failure: true
+
+  artifacts:
+    name: "${CI_JOB_NAME}@${CI_COMMIT_REF_NAME}"
+    paths:
+      - helm-diff.*

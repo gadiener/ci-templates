@@ -1,5 +1,5 @@
 .ssh:exec:
-  image: registry.jobtome.io/devops/docker-images/gcloud-sdk:v1.0.4
+  image: europe-west1-docker.pkg.dev/jobtome-platform/public/gcloud-sdk:v1.0.4
   stage: deploy
   script:
     - |
@@ -16,6 +16,7 @@
       mkdir ~/.ssh
       touch ~/.ssh/known_hosts ~/.ssh/id_rsa
       chmod -R 644 ~/.ssh
+      chmod -R 600 ~/.ssh/id_rsa
 
       echo "${SSH_PRIVATE_KEY}" | base64 -d > ~/.ssh/id_rsa
 
